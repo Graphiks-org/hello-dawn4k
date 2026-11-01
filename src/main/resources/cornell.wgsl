@@ -30,6 +30,7 @@ struct Params {
     height: u32,
     samples: u32,
     light: vec4u, // x: index of the single emissive quad
+    frame: vec4u, // x: 1-based frame index; radiance holds the progressive mean over frames
 }
 
 @group(0) @binding(0) var<storage, read> quads: array<Quad>;
@@ -197,9 +198,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
     let pixel = vec2u(gid.xy);
     var rng = Rng(pixel.y * params.width + pixel.x + 1u);
+    let index = pixel.y * params.width + pixel.x;
     var accumulated = vec3f(0.0);
     for (var sample = 0u; sample < params.samples; sample++) {
         accumulated += trace(pixel, &rng);
     }
-    radiance[pixel.y * params.width + pixel.x] = vec4f(accumulated / f32(params.samples), 1.0);
+    // Progressive mean over frames: frame 1 overwrites, later frames converge.
+    let frameMean = accumulated / f32(params.samples);
+    let previous = radiance[index].xyz;
+    let weight = 1.0 / f32(params.frame.x);
+    radiance[index] = vec4f(previous + (frameMean - previous) * weight, 1.0);
 }

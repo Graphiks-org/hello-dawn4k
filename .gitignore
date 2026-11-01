@@ -1,4 +1,6 @@
 .gradle/
 build/
 cornell.png
+cornell-window.png
 .kotlin/
+.idea/

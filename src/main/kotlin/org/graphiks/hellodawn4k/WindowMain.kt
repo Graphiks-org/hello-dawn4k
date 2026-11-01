@@ -1,0 +1,286 @@
+package org.graphiks.hellodawn4k
+
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.graphiks.dawn4k.DawnCommandEncoder
+import org.graphiks.dawn4k.toolkit.DawnSession
+import org.graphiks.dawn4k.toolkit.DawnSessionOptions
+import org.graphiks.dawn4k.toolkit.createRenderTexture
+import org.graphiks.dawn4k.toolkit.glfw.DawnWindowEvent
+import org.graphiks.dawn4k.toolkit.glfw.DawnWindowOptions
+import org.graphiks.dawn4k.toolkit.glfw.withDawnWindow
+import org.graphiks.dawn4k.toolkit.surface.DawnFrame
+import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
+import org.graphiks.webgpu.ArrayBuffer
+import org.graphiks.webgpu.GPUBufferUsage
+import org.graphiks.webgpu.GPUMapMode
+import org.graphiks.webgpu.GPULoadOp
+import org.graphiks.webgpu.GPUStoreOp
+import org.graphiks.webgpu.GPUTextureFormat
+import org.graphiks.webgpu.descriptors.Extent3D
+import org.graphiks.webgpu.descriptors.TexelCopyBufferInfo
+import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
+import org.graphiks.webgpu.descriptors.BindGroupDescriptor
+import org.graphiks.webgpu.descriptors.BindGroupEntry
+import org.graphiks.webgpu.descriptors.BufferDescriptor
+import org.graphiks.webgpu.descriptors.Color
+import org.graphiks.webgpu.descriptors.ColorTargetState
+import org.graphiks.webgpu.descriptors.ComputePipelineDescriptor
+import org.graphiks.webgpu.descriptors.FragmentState
+import org.graphiks.webgpu.descriptors.ProgrammableStage
+import org.graphiks.webgpu.descriptors.RenderPassDescriptor
+import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
+import org.graphiks.webgpu.descriptors.RenderPipelineDescriptor
+import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
+import org.graphiks.webgpu.descriptors.VertexState
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.time.Duration.Companion.seconds
+
+/** Samples traced per presented frame; the on-screen image converges as frames accumulate. */
+const val WINDOW_SAMPLES_PER_FRAME = 4
+
+/**
+ * Windowed Cornell box: each frame dispatches [WINDOW_SAMPLES_PER_FRAME] path-traced
+ * samples per pixel into a persistent radiance buffer (progressive mean), then a
+ * fullscreen pass tonemaps it onto the swapchain. The internal render resolution is
+ * fixed and stretched to the window extent.
+ */
+fun main() = runBlocking {
+    val frameLimit = System.getProperty("cornell.frames")?.toIntOrNull() ?: 0
+    withDawnWindow(
+        windowOptions = DawnWindowOptions(title = "hello-dawn4k — Cornell box", width = 960, height = 720),
+        sessionOptions = DawnSessionOptions(startupTimeout = 60.seconds),
+    ) { gpu, window, presentation ->
+        var closeRequested = false
+        val closeWatcher = launch {
+            window.events.first { it == DawnWindowEvent.CloseRequested }
+            closeRequested = true
+        }
+        try {
+            renderCornellFrames(gpu, presentation, frameLimit) { !closeRequested }
+        } finally {
+            closeWatcher.cancelAndJoin()
+        }
+    }
+}
+
+/** Invoke on process main; the GLFW loop stays there while encoding uses the GPU owner. */
+private suspend fun renderCornellFrames(
+    gpu: DawnSession,
+    presentation: DawnPresentation,
+    frameLimit: Int,
+    keepRendering: () -> Boolean,
+) {
+    require(frameLimit >= 0)
+    val renderer = CornellWindowRenderer(gpu, checkNotNull(presentation.configuration.value).format)
+    var frames = 0u
+    try {
+        while (currentCoroutineContext().isActive && keepRendering() && (frameLimit == 0 || frames < frameLimit.toUInt())) {
+            if (presentation.withFrame { frame ->
+                    renderer.renderFrame(frame, frames + 1u)
+                    frame.present()
+                }) {
+                frames++
+            }
+            delay(16)
+        }
+        println("hello-dawn4k frames=$frames")
+        if (frameLimit > 0) gpu.run { renderer.dumpPresentedFrame("cornell-window.png") }
+    } finally {
+        withContext(NonCancellable) {
+            try {
+                gpu.queue.onSubmittedWorkDone().getOrThrow()
+            } finally {
+                renderer.close()
+            }
+        }
+    }
+}
+
+/** Owns every GPU resource used by the windowed render loop; close before the session ends. */
+private class CornellWindowRenderer(private val session: DawnSession, format: GPUTextureFormat) : AutoCloseable {
+    private var closed = false
+    private val scene = CornellBox.scene()
+    private val quadBytes = (scene.quadData.size * 4).toULong()
+    private val radianceBytes = (WIDTH * HEIGHT * 16).toULong()
+
+    private val quads = session.device.createBuffer(
+        BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst),
+    )
+    private val params = session.device.createBuffer(
+        BufferDescriptor(48uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+    private val radiance = session.device.createBuffer(
+        BufferDescriptor(radianceBytes, GPUBufferUsage.Storage),
+    )
+    private val dims = session.device.createBuffer(
+        BufferDescriptor(16uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+
+    private val traceShader = session.device.createShaderModule(ShaderModuleDescriptor(resource("/cornell.wgsl")))
+    private val presentShader = session.device.createShaderModule(ShaderModuleDescriptor(resource("/present.wgsl")))
+    private val tracePipeline = session.device.createComputePipeline(
+        ComputePipelineDescriptor(ProgrammableStage(traceShader, "main")),
+    )
+    private val presentPipeline = session.device.createRenderPipeline(
+        RenderPipelineDescriptor(
+            vertex = VertexState(module = presentShader, entryPoint = "vs"),
+            fragment = FragmentState(
+                module = presentShader,
+                entryPoint = "fs",
+                targets = listOf(ColorTargetState(format)),
+            ),
+        ),
+    )
+    private val traceLayout = tracePipeline.getBindGroupLayout(0u)
+    private val traceBinding = session.device.createBindGroup(
+        BindGroupDescriptor(traceLayout, listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, radiance), BindGroupEntry(2u, params))),
+    )
+    private val presentLayout = presentPipeline.getBindGroupLayout(0u)
+    private val presentBinding = session.device.createBindGroup(
+        BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
+    )
+
+    init {
+        session.queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
+        session.queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(WIDTH.toUInt(), HEIGHT.toUInt(), 0u, 0u)))
+    }
+
+    /** One accumulation frame plus one presentation pass, submitted in a single command buffer. */
+    fun renderFrame(frame: DawnFrame, frameIndex: UInt) {
+        session.queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
+            scene.quadCount.toUInt(),
+            WIDTH.toUInt(),
+            HEIGHT.toUInt(),
+            WINDOW_SAMPLES_PER_FRAME.toUInt(),
+            scene.lightIndex.toUInt(), 0u, 0u, 0u,
+            frameIndex, 0u, 0u, 0u,
+        )))
+        (session.device.createCommandEncoder() as DawnCommandEncoder).use { encoder ->
+            encoder.beginComputePass().use { pass ->
+                try {
+                    pass.setPipeline(tracePipeline)
+                    pass.setBindGroup(0u, traceBinding)
+                    pass.dispatchWorkgroups(
+                        ((WIDTH + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
+                        ((HEIGHT + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
+                    )
+                } finally {
+                    pass.end()
+                }
+            }
+            encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
+                RenderPassColorAttachment(
+                    frame.view,
+                    loadOp = GPULoadOp.Clear,
+                    storeOp = GPUStoreOp.Store,
+                    clearValue = Color(0.0, 0.0, 0.0, 1.0),
+                ),
+            ))).use { pass ->
+                try {
+                    pass.setPipeline(presentPipeline)
+                    pass.setBindGroup(0u, presentBinding)
+                    pass.draw(3u)
+                } finally {
+                    pass.end()
+                }
+            }
+            encoder.finish().use { session.queue.submit(listOf(it)) }
+        }
+    }
+
+    /**
+     * Smoke-test helper: runs the presentation pass into an offscreen RGBA8Unorm texture
+     * (the swapchain pipeline format cannot write there, so a twin pipeline is built) and
+     * writes exactly what the window shows to [path], row padding already absent at 640 px.
+     */
+    suspend fun dumpPresentedFrame(path: String) {
+        session.createRenderTexture(WIDTH.toUInt(), HEIGHT.toUInt(), GPUTextureFormat.RGBA8Unorm).use { target ->
+            session.device.createRenderPipeline(
+                RenderPipelineDescriptor(
+                    vertex = VertexState(module = presentShader, entryPoint = "vs"),
+                    fragment = FragmentState(
+                        module = presentShader,
+                        entryPoint = "fs",
+                        targets = listOf(ColorTargetState(GPUTextureFormat.RGBA8Unorm)),
+                    ),
+                ),
+            ).use { dumpPipeline ->
+                // The dump pipeline's default layout differs from the swapchain pipeline's;
+                // bind groups must come from the layout of the pipeline they are used with.
+                dumpPipeline.getBindGroupLayout(0u).use { dumpLayout ->
+                    session.device.createBindGroup(
+                        BindGroupDescriptor(dumpLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
+                    ).use { dumpBinding ->
+                        target.createView().use { view ->
+                            session.device.createBuffer(
+                                BufferDescriptor(2560uL * HEIGHT.toULong(), GPUBufferUsage.CopyDst or GPUBufferUsage.MapRead),
+                            ).use { staging ->
+                                (session.device.createCommandEncoder() as DawnCommandEncoder).use { encoder ->
+                                    encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
+                                        RenderPassColorAttachment(
+                                            view,
+                                            loadOp = GPULoadOp.Clear,
+                                            storeOp = GPUStoreOp.Store,
+                                            clearValue = Color(0.0, 0.0, 0.0, 1.0),
+                                        ),
+                                    ))).use { pass ->
+                                        try {
+                                            pass.setPipeline(dumpPipeline)
+                                            pass.setBindGroup(0u, dumpBinding)
+                                            pass.draw(3u)
+                                        } finally {
+                                            pass.end()
+                                        }
+                                    }
+                                    encoder.copyTextureToBuffer(
+                                        TexelCopyTextureInfo(target),
+                                        TexelCopyBufferInfo(staging, bytesPerRow = 2560u, rowsPerImage = HEIGHT.toUInt()),
+                                        Extent3D(WIDTH.toUInt(), HEIGHT.toUInt()),
+                                    )
+                                    encoder.finish().use { session.queue.submit(listOf(it)) }
+                                }
+                                staging.mapAsync(GPUMapMode.Read).getOrThrow()
+                                val rgba = try {
+                                    staging.getMappedRange().toByteArray()
+                                } finally {
+                                    staging.unmap()
+                                }
+                                Files.write(Path.of(path), Png.encode(WIDTH, HEIGHT, rgba))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        traceBinding.close()
+        presentBinding.close()
+        traceLayout.close()
+        presentLayout.close()
+        presentPipeline.close()
+        tracePipeline.close()
+        presentShader.close()
+        traceShader.close()
+        dims.close()
+        radiance.close()
+        params.close()
+        quads.close()
+    }
+
+    private fun resource(name: String): String =
+        requireNotNull(javaClass.getResourceAsStream(name)) { "missing resource $name" }
+            .readBytes().decodeToString()
+}

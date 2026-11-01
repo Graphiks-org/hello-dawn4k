@@ -31,7 +31,7 @@ fun main() = runBlocking {
             val quadBytes = (scene.quadData.size * 4).toULong()
             val radianceBytes = (WIDTH * HEIGHT * 16).toULong()
             gpu.device.createBuffer(BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst)).use { quads ->
-                gpu.device.createBuffer(BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst)).use { params ->
+                gpu.device.createBuffer(BufferDescriptor(48uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst)).use { params ->
                     gpu.device.createBuffer(BufferDescriptor(radianceBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopySrc)).use { radianceBuffer ->
                         gpu.device.createBuffer(BufferDescriptor(radianceBytes, GPUBufferUsage.CopyDst or GPUBufferUsage.MapRead)).use { readback ->
                             gpu.queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
@@ -40,8 +40,8 @@ fun main() = runBlocking {
                                 WIDTH.toUInt(),
                                 HEIGHT.toUInt(),
                                 SAMPLES_PER_PIXEL.toUInt(),
-                                scene.lightIndex.toUInt(),
-                                0u, 0u, 0u, // padding keeps the light vec4u 16-byte aligned
+                                scene.lightIndex.toUInt(), 0u, 0u, 0u, // light vec4u, 16-byte aligned
+                                1u, 0u, 0u, 0u, // frame: a single-shot render overwrites the buffer
                             )))
                             gpu.device.createShaderModule(ShaderModuleDescriptor(wgsl)).use { shader ->
                                 gpu.device.createComputePipeline(ComputePipelineDescriptor(ProgrammableStage(shader, "main"))).use { pipeline ->

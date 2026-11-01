@@ -14,21 +14,32 @@ résultat est écrit dans `cornell.png`.
 ## Lancer
 
 ```bash
-./gradlew run
+./gradlew run          # headless : rend 1024 spp et écrit cornell.png
+./gradlew runWindow    # fenêtre GLFW : convergence progressive en direct
+```
+
+La fenêtre accumule 4 échantillons par frame (60 fps ≈ 2400 spp en 10 s) et
+affiche la moyenne via une passe de présentation plein écran ; elle se ferme
+avec la croix. Run fumée fini + dump du framebuffer :
+
+```bash
+./gradlew runWindow -Pcornell.frames=600   # écrit cornell-window.png
 ```
 
 Prérequis : JDK 25 (le toolchain Gradle le télécharge si besoin) et un GPU
-ou un adaptateur logiciel Metal/Vulkan. L'image `cornell.png` est écrite à la
-racine du projet.
+ou un adaptateur logiciel Metal/Vulkan.
 
 ## Structure
 
 | Fichier | Rôle |
 | --- | --- |
-| `src/main/resources/cornell.wgsl` | le path tracer (compute shader) |
+| `src/main/resources/cornell.wgsl` | le path tracer (compute shader, accumulation progressive) |
+| `src/main/resources/present.wgsl` | passe de présentation : triangle plein écran + tonemap |
 | `src/main/kotlin/org/graphiks/hellodawn4k/CornellBox.kt` | la scène : quads, matériaux, boîtes tournées |
-| `src/main/kotlin/org/graphiks/hellodawn4k/Main.kt` | session toolkit, dispatch GPU, readback, tonemapping |
+| `src/main/kotlin/org/graphiks/hellodawn4k/Main.kt` | session headless, dispatch GPU, readback, tonemapping |
+| `src/main/kotlin/org/graphiks/hellodawn4k/WindowMain.kt` | fenêtre GLFW avec convergence en direct |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Png.kt` | encodeur PNG minimal (sans dépendance) |
+| `src/main/kotlin/org/graphiks/hellodawn4k/Reference.kt` | path tracer CPU miroir pour la validation numérique |
 
 La résolution, le nombre d'échantillons et la taille de workgroup se règlent
 en tête de `Main.kt` (`WIDTH`, `HEIGHT`, `SAMPLES_PER_PIXEL`, `WORKGROUP_SIZE`).
