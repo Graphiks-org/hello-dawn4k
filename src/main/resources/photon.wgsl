@@ -3,6 +3,10 @@
 // into a per-quad lightmap (one array layer per quad), entirely independent of
 // the camera. The quad layout, intersection and RNG duplicate cornell.wgsl on
 // purpose: WGSL has no includes and both files stay self-contained.
+//
+// Derived from sample/cornell/radiosity.wgsl of https://github.com/webgpu/webgpu-samples
+// (BSD-3-Clause, Copyright 2019 WebGPU Samples Contributors) — full license text
+// in THIRD_PARTY_LICENSES/webgpu-samples-LICENSE.txt.
 
 struct Quad {
     origin: vec4f,

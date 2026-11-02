@@ -93,3 +93,13 @@ test d'intersection quad/triangle lors du développement.
 les déclare runtime-only) et `webgpu-descriptors`, résolues depuis les
 snapshots Maven Central de l'organisation ; les bibliothèques JVM embarquent
 Dawn, GLFW et HarfBuzz, rien d'autre à installer.
+
+## Licences
+
+- Ce projet : **MIT** (voir `LICENSE`).
+- Le mode radiosity (`photon.wgsl`) est dérivé de
+  [webgpu-samples](https://github.com/webgpu/webgpu-samples) (**BSD-3-Clause**,
+  texte complet dans `THIRD_PARTY_LICENSES/webgpu-samples-LICENSE.txt`).
+- La police Liberation Sans embarquée est sous **OFL-1.1**
+  (`src/main/resources/fonts/OFL-1.1.txt`).
+- Dépendances dawn4k et Kalligraphie : **MIT**.
