@@ -42,4 +42,16 @@ tasks.register<JavaExec>("runWindow") {
     providers.gradleProperty("cornell.frames").orNull?.let { systemProperty("cornell.frames", it) }
     // Optional orbit override: -Pcornell.orbit=azimuth,elevation,radius (radians)
     providers.gradleProperty("cornell.orbit").orNull?.let { systemProperty("cornell.orbit", it) }
+    providers.gradleProperty("cornell.hud").orNull?.let { systemProperty("cornell.hud", it) }
+}
+
+// Noise comparison between two framebuffer dumps: ./gradlew noiseMetric a.png b.png
+tasks.register<JavaExec>("noiseMetric") {
+    group = "verification"
+    description = "Mean 3x3 luma standard deviation over the back wall of two dumps."
+    mainClass.set("org.graphiks.hellodawn4k.NoiseMetricKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+    args = (providers.gradleProperty("noise.a").orNull?.let { listOf(it) } ?: emptyList()) +
+        (providers.gradleProperty("noise.b").orNull?.let { listOf(it) } ?: emptyList())
 }

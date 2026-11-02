@@ -201,8 +201,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
     let pixel = vec2u(gid.xy);
-    var rng = Rng(pixel.y * params.width + pixel.x + 1u);
     let index = pixel.y * params.width + pixel.x;
+    // Mix the frame index into the seed: with a frame-invariant seed every dispatch
+    // retraces the same sample sequence, so progressive accumulation stalls at
+    // samples-per-frame effective spp (dumps at 100 and 400 frames were identical).
+    var rng = Rng(index + 1u + params.frame.x * 0x9E3779B9u);
+    _ = rngNext(&rng); // discard one draw to wash out low-bit seed artifacts
     var accumulated = vec3f(0.0);
     for (var sample = 0u; sample < params.samples; sample++) {
         accumulated += trace(pixel, &rng);

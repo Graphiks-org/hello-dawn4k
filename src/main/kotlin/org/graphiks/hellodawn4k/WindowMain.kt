@@ -183,7 +183,25 @@ private suspend fun renderCornellFrames(
             delay(16)
         }
         println("hello-dawn4k frames=$presented")
-        if (frameLimit > 0) gpu.run { renderer.dumpPresentedFrame("cornell-window.png", hudRenderer, hudVertices) }
+        if (frameLimit > 0) {
+            // Refresh the HUD so the dump reports the final sample count, not the last 2 Hz update.
+            if (hudRenderer != null) {
+                val samples = ((accumulated + 1u) * WINDOW_SAMPLES_PER_FRAME.toUInt()).toInt()
+                val lines = listOf(
+                    hudText!!.layoutLine("${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${WIDTH}x$HEIGHT"),
+                    hudText.layoutLine(
+                        "az %.0f°  el %.0f°  zoom %.1f".format(
+                            Math.toDegrees(controls.camera.azimuth.toDouble()),
+                            Math.toDegrees(controls.camera.elevation.toDouble()),
+                            controls.camera.radius,
+                        ),
+                    ),
+                    hudText.layoutLine(adapterName),
+                )
+                hudVertices = hudRenderer.buildVertices(lines, baseX = 12f, baseY = 30f, lineHeight = 26f)
+            }
+            gpu.run { renderer.dumpPresentedFrame("cornell-window.png", hudRenderer, hudVertices) }
+        }
     } finally {
         withContext(NonCancellable) {
             try {
