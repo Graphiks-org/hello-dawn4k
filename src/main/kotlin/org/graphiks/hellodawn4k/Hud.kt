@@ -275,6 +275,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
             usage = GPUTextureUsage.TextureBinding or GPUTextureUsage.CopyDst,
         ),
     )
+    private val atlasView = atlas.createView()
     private val sampler = session.device.createSampler(SamplerDescriptor(
         magFilter = GPUFilterMode.Linear,
         minFilter = GPUFilterMode.Linear,
@@ -425,7 +426,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
                 listOf(
                     BindGroupEntry(0u, uniforms),
                     BindGroupEntry(1u, sampler),
-                    BindGroupEntry(2u, atlas),
+                    BindGroupEntry(2u, atlasView),
                     BindGroupEntry(3u, vertices),
                 ),
             ),
@@ -442,6 +443,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
         vertices.close()
         uniforms.close()
         sampler.close()
+        atlasView.close()
         atlas.close()
     }
 }
