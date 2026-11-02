@@ -47,6 +47,13 @@ import kotlin.time.Duration.Companion.seconds
 /** Samples traced per presented frame; the on-screen image converges as frames accumulate. */
 const val WINDOW_SAMPLES_PER_FRAME = 8
 
+/**
+ * After a camera move the accumulation restarts from this many frames instead of zero:
+ * the new view takes 1/(n+1) per frame and the old one fades over roughly this many frames,
+ * trading a short motion trail for the flicker of a single-frame 8-spp image.
+ */
+const val INTERACTIVE_HISTORY_FRAMES = 16u
+
 // GLFW constants forwarded as-is by the toolkit's window events.
 private const val GLFW_RELEASE = 0
 private const val GLFW_BUTTON_LEFT = 0
@@ -152,7 +159,9 @@ private suspend fun renderCornellFrames(
             if (controls.cameraDirty) {
                 controls.cameraDirty = false
                 renderer.updateCamera(controls.camera.basis())
-                accumulated = 0u
+                // Restart the mean from a small history floor instead of zero: smooths the
+                // interactive image (see INTERACTIVE_HISTORY_FRAMES).
+                accumulated = INTERACTIVE_HISTORY_FRAMES
             }
             val frameStartedAt = System.nanoTime()
             if (presentation.withFrame { frame ->
