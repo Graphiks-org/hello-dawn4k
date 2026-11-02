@@ -9,21 +9,36 @@ résultat est écrit dans `cornell.png`.
 - deux boîtes blanches tournées, une haute et une basse
 - une lampe au plafond, éclairage direct par échantillonnage de la lumière (NEE)
 - rebonds indirects en échantillonnage pondéré par cosinus, avec roulette russe
-- sortie linéaire HDR → tonemapping Reinhard + gamma 2.2 côté hôte
+- sortie linéaire HDR → tonemapping Reinhard + gamma 2.2, dans le shader de présentation
+- caméra orbitale interactive dans la fenêtre (drag / molette / R / Échap)
 
 ## Lancer
 
 ```bash
-./gradlew run          # headless : rend 1024 spp et écrit cornell.png
-./gradlew runWindow    # fenêtre GLFW : convergence progressive en direct
+# headless : rend 1024 spp et écrit cornell.png
+./gradlew run
+# fenêtre GLFW : convergence progressive en direct
+./gradlew runWindow
 ```
 
 La fenêtre accumule 4 échantillons par frame (60 fps ≈ 2400 spp en 10 s) et
-affiche la moyenne via une passe de présentation plein écran ; elle se ferme
-avec la croix. Run fumée fini + dump du framebuffer :
+affiche la moyenne via une passe de présentation plein écran. La caméra est
+orbitale :
+
+| Entrée | Action |
+| --- | --- |
+| glisser (bouton gauche) | orbiter autour de la boîte |
+| molette | zoomer |
+| `R` | remettre la caméra par défaut |
+| `Échap` ou croix | fermer |
+
+Chaque mouvement de caméra relance l'accumulation (l'image redevient bruitée
+puis reconverge). Run fumée fini + dump du framebuffer, avec position
+orbitale optionnelle :
 
 ```bash
-./gradlew runWindow -Pcornell.frames=600   # écrit cornell-window.png
+# écrit cornell-window.png depuis azimut 0.7 rad, élévation 0.25 rad, rayon 2.6
+./gradlew runWindow -Pcornell.frames=600 -Pcornell.orbit=0.7,0.25,2.6
 ```
 
 Prérequis : JDK 25 (le toolchain Gradle le télécharge si besoin) et un GPU
@@ -36,6 +51,7 @@ ou un adaptateur logiciel Metal/Vulkan.
 | `src/main/resources/cornell.wgsl` | le path tracer (compute shader, accumulation progressive) |
 | `src/main/resources/present.wgsl` | passe de présentation : triangle plein écran + tonemap |
 | `src/main/kotlin/org/graphiks/hellodawn4k/CornellBox.kt` | la scène : quads, matériaux, boîtes tournées |
+| `src/main/kotlin/org/graphiks/hellodawn4k/Camera.kt` | base de caméra partagée + contrôles orbitaux |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Main.kt` | session headless, dispatch GPU, readback, tonemapping |
 | `src/main/kotlin/org/graphiks/hellodawn4k/WindowMain.kt` | fenêtre GLFW avec convergence en direct |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Png.kt` | encodeur PNG minimal (sans dépendance) |

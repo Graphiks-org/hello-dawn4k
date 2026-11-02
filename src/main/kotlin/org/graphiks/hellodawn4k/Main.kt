@@ -32,6 +32,8 @@ fun main() = runBlocking {
             val radianceBytes = (WIDTH * HEIGHT * 16).toULong()
             gpu.device.createBuffer(BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst)).use { quads ->
                 gpu.device.createBuffer(BufferDescriptor(48uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst)).use { params ->
+                gpu.device.createBuffer(BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst)).use { camera ->
+                    gpu.queue.writeBuffer(camera, 0uL, ArrayBuffer.of(CameraBasis.classic().toUniform()))
                     gpu.device.createBuffer(BufferDescriptor(radianceBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopySrc)).use { radianceBuffer ->
                         gpu.device.createBuffer(BufferDescriptor(radianceBytes, GPUBufferUsage.CopyDst or GPUBufferUsage.MapRead)).use { readback ->
                             gpu.queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
@@ -50,6 +52,7 @@ fun main() = runBlocking {
                                             BindGroupEntry(0u, quads),
                                             BindGroupEntry(1u, radianceBuffer),
                                             BindGroupEntry(2u, params),
+                                            BindGroupEntry(3u, camera),
                                         ))).use { binding ->
                                             (gpu.device.createCommandEncoder() as DawnCommandEncoder).use { encoder ->
                                                 encoder.beginComputePass().use { pass ->
@@ -82,6 +85,7 @@ fun main() = runBlocking {
                 }
             }
         }
+    }
     }
 
     Reference.compare(scene, radiance)

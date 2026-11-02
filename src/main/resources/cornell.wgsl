@@ -11,9 +11,12 @@ const SURFACE_EPSILON: f32 = 1e-4;
 const MAX_BOUNCES: u32 = 5u;
 const MISSED: u32 = 0xffffffffu;
 
-const CAMERA_POSITION = vec3f(0.0, 1.05, 2.8);
-const CAMERA_TAN_HALF_FOV = 0.42;
-const CAMERA_LOOK_UP = 0.12; // tilt that keeps the ceiling light inside the frame
+struct Camera {
+    position: vec4f,
+    right: vec4f,
+    up: vec4f,
+    forward: vec4f, // xyz: unit forward direction, w: tan of the half vertical fov
+}
 
 struct Quad {
     origin: vec4f,     // xyz: corner, w unused
@@ -36,6 +39,7 @@ struct Params {
 @group(0) @binding(0) var<storage, read> quads: array<Quad>;
 @group(0) @binding(1) var<storage, read_write> radiance: array<vec4f>;
 @group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(3) var<uniform> camera: Camera;
 
 struct Rng {
     state: u32,
@@ -127,12 +131,12 @@ fn trace(pixel: vec2u, rng: ptr<function, Rng>) -> vec3f {
     let uv = (vec2f(pixel) + jitter) / vec2f(f32(params.width), f32(params.height));
     let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - 2.0 * uv.y);
     let aspect = f32(params.width) / f32(params.height);
-    var rd = normalize(vec3f(
-        ndc.x * CAMERA_TAN_HALF_FOV * aspect,
-        ndc.y * CAMERA_TAN_HALF_FOV + CAMERA_LOOK_UP,
-        -1.0,
-    ));
-    var ro = CAMERA_POSITION;
+    var rd = normalize(
+        camera.right.xyz * (ndc.x * camera.forward.w * aspect)
+            + camera.up.xyz * (ndc.y * camera.forward.w)
+            + camera.forward.xyz
+    );
+    var ro = camera.position.xyz;
 
     var color = vec3f(0.0);
     var throughput = vec3f(1.0);

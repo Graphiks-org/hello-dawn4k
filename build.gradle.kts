@@ -34,4 +34,6 @@ tasks.register<JavaExec>("runWindow") {
     }
     // Finite smoke run: ./gradlew runWindow -Pcornell.frames=60
     providers.gradleProperty("cornell.frames").orNull?.let { systemProperty("cornell.frames", it) }
+    // Optional orbit override: -Pcornell.orbit=azimuth,elevation,radius (radians)
+    providers.gradleProperty("cornell.orbit").orNull?.let { systemProperty("cornell.orbit", it) }
 }

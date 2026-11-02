@@ -10,10 +10,8 @@ import kotlin.random.Random
  * tolerance rather than bit-for-bit.
  */
 object Reference {
-    // Must mirror the constants in cornell.wgsl.
-    private val CAMERA = doubleArrayOf(0.0, 1.05, 2.8)
-    private const val TAN_HALF_FOV = 0.42
-    private const val LOOK_UP = 0.12
+    // Must mirror the camera the headless render writes into its uniform.
+    private val camera = CameraBasis.classic()
     private const val MAX_BOUNCES = 5
     private const val EPSILON = 1e-4
 
@@ -109,22 +107,26 @@ object Reference {
         )
     }
 
-    private fun traceSample(quads: List<Quad>, lightIndex: Int, pixelX: Int, pixelY: Int, rnd: Random): DoubleArray {
-        val jitterX = rnd.nextDouble()
-        val jitterY = rnd.nextDouble()
-        val uvx = (pixelX + jitterX) / WIDTH
-        val uvy = (pixelY + jitterY) / HEIGHT
-        val ndcX = uvx * 2.0 - 1.0
-        val ndcY = 1.0 - 2.0 * uvy
+    private fun cameraRay(pixelX: Int, pixelY: Int, jitterX: Double, jitterY: Double): Pair<DoubleArray, DoubleArray> {
+        val ndcX = ((pixelX + jitterX) / WIDTH * 2.0 - 1.0)
+        val ndcY = (1.0 - (pixelY + jitterY) / HEIGHT * 2.0)
         val aspect = WIDTH.toDouble() / HEIGHT
-        val rd = normalized(
-            doubleArrayOf(
-                ndcX * TAN_HALF_FOV * aspect,
-                ndcY * TAN_HALF_FOV + LOOK_UP,
-                -1.0,
-            )
+        val tan = camera.tanHalfFov.toDouble()
+        val dir = doubleArrayOf(
+            camera.right.x * ndcX * tan * aspect + camera.up.x * ndcY * tan + camera.forward.x,
+            camera.right.y * ndcX * tan * aspect + camera.up.y * ndcY * tan + camera.forward.y,
+            camera.right.z * ndcX * tan * aspect + camera.up.z * ndcY * tan + camera.forward.z,
         )
-        val ro = CAMERA.copyOf()
+        val origin = doubleArrayOf(
+            camera.position.x.toDouble(),
+            camera.position.y.toDouble(),
+            camera.position.z.toDouble(),
+        )
+        return origin to normalized(dir)
+    }
+
+    private fun traceSample(quads: List<Quad>, lightIndex: Int, pixelX: Int, pixelY: Int, rnd: Random): DoubleArray {
+        val (ro, rd) = cameraRay(pixelX, pixelY, rnd.nextDouble(), rnd.nextDouble())
 
         val color = DoubleArray(3)
         val throughput = DoubleArray(3) { 1.0 }
@@ -193,16 +195,8 @@ object Reference {
         println("-- reference CPU (${samples} spp/px) vs GPU --")
         for ((x, y, label) in probes) {
             // Which surface does the primary ray see? (mirrors the shader's ray generation)
-            val uvx = (x + 0.5) / WIDTH
-            val uvy = (y + 0.5) / HEIGHT
-            val probeRd = normalized(
-                doubleArrayOf(
-                    (uvx * 2.0 - 1.0) * TAN_HALF_FOV * (WIDTH.toDouble() / HEIGHT),
-                    (1.0 - 2.0 * uvy) * TAN_HALF_FOV,
-                    -1.0,
-                )
-            )
-            val primary = closest(quads, CAMERA, probeRd)
+            val (probeOrigin, probeRd) = cameraRay(x, y, 0.5, 0.5)
+            val primary = closest(quads, probeOrigin, probeRd)
             val sum = DoubleArray(3)
             val rnd = Random(1234L)
             repeat(samples) {

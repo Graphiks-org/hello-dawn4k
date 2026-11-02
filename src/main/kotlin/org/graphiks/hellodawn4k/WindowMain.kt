@@ -4,7 +4,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -13,6 +12,7 @@ import org.graphiks.dawn4k.DawnCommandEncoder
 import org.graphiks.dawn4k.toolkit.DawnSession
 import org.graphiks.dawn4k.toolkit.DawnSessionOptions
 import org.graphiks.dawn4k.toolkit.createRenderTexture
+import org.graphiks.dawn4k.toolkit.glfw.DawnWindow
 import org.graphiks.dawn4k.toolkit.glfw.DawnWindowEvent
 import org.graphiks.dawn4k.toolkit.glfw.DawnWindowOptions
 import org.graphiks.dawn4k.toolkit.glfw.withDawnWindow
@@ -24,21 +24,21 @@ import org.graphiks.webgpu.GPUMapMode
 import org.graphiks.webgpu.GPULoadOp
 import org.graphiks.webgpu.GPUStoreOp
 import org.graphiks.webgpu.GPUTextureFormat
-import org.graphiks.webgpu.descriptors.Extent3D
-import org.graphiks.webgpu.descriptors.TexelCopyBufferInfo
-import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
 import org.graphiks.webgpu.descriptors.BindGroupDescriptor
 import org.graphiks.webgpu.descriptors.BindGroupEntry
 import org.graphiks.webgpu.descriptors.BufferDescriptor
 import org.graphiks.webgpu.descriptors.Color
 import org.graphiks.webgpu.descriptors.ColorTargetState
 import org.graphiks.webgpu.descriptors.ComputePipelineDescriptor
+import org.graphiks.webgpu.descriptors.Extent3D
 import org.graphiks.webgpu.descriptors.FragmentState
 import org.graphiks.webgpu.descriptors.ProgrammableStage
 import org.graphiks.webgpu.descriptors.RenderPassDescriptor
 import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
 import org.graphiks.webgpu.descriptors.RenderPipelineDescriptor
 import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
+import org.graphiks.webgpu.descriptors.TexelCopyBufferInfo
+import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
 import org.graphiks.webgpu.descriptors.VertexState
 import java.nio.file.Files
 import java.nio.file.Path
@@ -47,27 +47,82 @@ import kotlin.time.Duration.Companion.seconds
 /** Samples traced per presented frame; the on-screen image converges as frames accumulate. */
 const val WINDOW_SAMPLES_PER_FRAME = 4
 
+// GLFW constants forwarded as-is by the toolkit's window events.
+private const val GLFW_RELEASE = 0
+private const val GLFW_BUTTON_LEFT = 0
+private const val GLFW_KEY_R = 82
+private const val GLFW_KEY_ESCAPE = 256
+
 /**
  * Windowed Cornell box: each frame dispatches [WINDOW_SAMPLES_PER_FRAME] path-traced
  * samples per pixel into a persistent radiance buffer (progressive mean), then a
- * fullscreen pass tonemaps it onto the swapchain. The internal render resolution is
- * fixed and stretched to the window extent.
+ * fullscreen pass tonemaps it onto the swapchain. Drag orbits the camera, the wheel
+ * zooms, R resets and Escape closes; any camera motion restarts the accumulation.
+ * The internal render resolution is fixed and stretched to the window extent.
  */
 fun main() = runBlocking {
     val frameLimit = System.getProperty("cornell.frames")?.toIntOrNull() ?: 0
+    val camera = OrbitCamera()
+    // Smoke-test hook: render the finite run from an explicit orbit position.
+    System.getProperty("cornell.orbit")
+        ?.split(',')
+        ?.mapNotNull { it.toFloatOrNull() }
+        ?.takeIf { it.size == 3 }
+        ?.let { (azimuth, elevation, radius) ->
+            camera.azimuth = azimuth
+            camera.elevation = elevation
+            camera.radius = radius
+        }
     withDawnWindow(
         windowOptions = DawnWindowOptions(title = "hello-dawn4k — Cornell box", width = 960, height = 720),
         sessionOptions = DawnSessionOptions(startupTimeout = 60.seconds),
     ) { gpu, window, presentation ->
-        var closeRequested = false
-        val closeWatcher = launch {
-            window.events.first { it == DawnWindowEvent.CloseRequested }
-            closeRequested = true
-        }
+        val controls = OrbitControls(window, camera)
+        val watcher = launch { controls.collect() }
         try {
-            renderCornellFrames(gpu, presentation, frameLimit) { !closeRequested }
+            renderCornellFrames(gpu, presentation, frameLimit, controls)
         } finally {
-            closeWatcher.cancelAndJoin()
+            watcher.cancelAndJoin()
+        }
+    }
+}
+
+/** Folded window input into one collector; cameraDirty signals an accumulation restart. */
+private class OrbitControls(private val window: DawnWindow, val camera: OrbitCamera = OrbitCamera()) {
+    @Volatile var closeRequested = false
+    @Volatile var cameraDirty = true
+    private var dragging = false
+    private var lastPointer: Pair<Double, Double>? = null
+
+    suspend fun collect() {
+        window.events.collect { event ->
+            when (event) {
+                is DawnWindowEvent.PointerButton -> if (event.button == GLFW_BUTTON_LEFT) {
+                    dragging = event.action != GLFW_RELEASE
+                    if (!dragging) lastPointer = null
+                }
+                is DawnWindowEvent.PointerMoved -> {
+                    val previous = lastPointer
+                    if (dragging && previous != null) {
+                        camera.drag(event.x - previous.first, event.y - previous.second)
+                        cameraDirty = true
+                    }
+                    lastPointer = event.x to event.y
+                }
+                is DawnWindowEvent.Scroll -> {
+                    camera.zoom(event.y)
+                    cameraDirty = true
+                }
+                is DawnWindowEvent.Key -> when (event.key) {
+                    GLFW_KEY_R -> {
+                        camera.reset()
+                        cameraDirty = true
+                    }
+                    GLFW_KEY_ESCAPE -> window.requestClose()
+                }
+                DawnWindowEvent.CloseRequested -> closeRequested = true
+                else -> {}
+            }
         }
     }
 }
@@ -77,22 +132,32 @@ private suspend fun renderCornellFrames(
     gpu: DawnSession,
     presentation: DawnPresentation,
     frameLimit: Int,
-    keepRendering: () -> Boolean,
+    controls: OrbitControls,
 ) {
     require(frameLimit >= 0)
     val renderer = CornellWindowRenderer(gpu, checkNotNull(presentation.configuration.value).format)
-    var frames = 0u
+    var presented = 0u
+    var accumulated = 0u
     try {
-        while (currentCoroutineContext().isActive && keepRendering() && (frameLimit == 0 || frames < frameLimit.toUInt())) {
+        while (currentCoroutineContext().isActive &&
+            !controls.closeRequested &&
+            (frameLimit == 0 || presented < frameLimit.toUInt())
+        ) {
+            if (controls.cameraDirty) {
+                controls.cameraDirty = false
+                renderer.updateCamera(controls.camera.basis())
+                accumulated = 0u
+            }
             if (presentation.withFrame { frame ->
-                    renderer.renderFrame(frame, frames + 1u)
+                    renderer.renderFrame(frame, accumulated + 1u)
                     frame.present()
                 }) {
-                frames++
+                presented++
+                accumulated++
             }
             delay(16)
         }
-        println("hello-dawn4k frames=$frames")
+        println("hello-dawn4k frames=$presented")
         if (frameLimit > 0) gpu.run { renderer.dumpPresentedFrame("cornell-window.png") }
     } finally {
         withContext(NonCancellable) {
@@ -124,6 +189,9 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
     private val dims = session.device.createBuffer(
         BufferDescriptor(16uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
+    private val cameraBuffer = session.device.createBuffer(
+        BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
 
     private val traceShader = session.device.createShaderModule(ShaderModuleDescriptor(resource("/cornell.wgsl")))
     private val presentShader = session.device.createShaderModule(ShaderModuleDescriptor(resource("/present.wgsl")))
@@ -142,7 +210,10 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
     )
     private val traceLayout = tracePipeline.getBindGroupLayout(0u)
     private val traceBinding = session.device.createBindGroup(
-        BindGroupDescriptor(traceLayout, listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, radiance), BindGroupEntry(2u, params))),
+        BindGroupDescriptor(
+            traceLayout,
+            listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, radiance), BindGroupEntry(2u, params), BindGroupEntry(3u, cameraBuffer)),
+        ),
     )
     private val presentLayout = presentPipeline.getBindGroupLayout(0u)
     private val presentBinding = session.device.createBindGroup(
@@ -152,6 +223,11 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
     init {
         session.queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
         session.queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(WIDTH.toUInt(), HEIGHT.toUInt(), 0u, 0u)))
+    }
+
+    /** Writes the camera basis uniform; called whenever the orbit controls move. */
+    fun updateCamera(basis: CameraBasis) {
+        session.queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
     }
 
     /** One accumulation frame plus one presentation pass, submitted in a single command buffer. */
@@ -274,6 +350,7 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
         tracePipeline.close()
         presentShader.close()
         traceShader.close()
+        cameraBuffer.close()
         dims.close()
         radiance.close()
         params.close()
