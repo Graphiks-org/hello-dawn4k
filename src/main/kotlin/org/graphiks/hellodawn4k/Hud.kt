@@ -4,8 +4,11 @@ import org.graphiks.dawn4k.DawnRenderPassEncoder
 import org.graphiks.dawn4k.toolkit.DawnSession
 import org.graphiks.kalligraphie.EditableLineFacadeRequest
 import org.graphiks.kalligraphie.EditableLineLayoutSession
+import org.graphiks.kalligraphie.FontDirectoryCatalog
+import org.graphiks.kalligraphie.FontDirectoryCatalogOptions
 import org.graphiks.kalligraphie.Kalligraphie
 import org.graphiks.kalligraphie.MacosSystemFontCatalog
+import org.graphiks.kalligraphie.MacosSystemFontCatalogOptions
 import org.graphiks.kalligraphie.api.BaseDirection
 import org.graphiks.kalligraphie.api.EditableLine
 import org.graphiks.kalligraphie.api.EditableLineMaterialization
@@ -70,11 +73,13 @@ class HudText private constructor(
     private val resolver: FontAssetResolverHandle,
     private val session: EditableLineLayoutSession,
     private val requirements: FontAccessRequirementsSnapshot,
+    private val tempRoot: java.nio.file.Path?,
 ) : AutoCloseable {
 
     override fun close() {
         session.close()
         resolver.close()
+        tempRoot?.toFile()?.deleteRecursively()
     }
 
     fun layoutLine(text: String): List<HudGlyph> {
@@ -122,7 +127,13 @@ class HudText private constructor(
     }
 
     companion object {
-        /** Opens Menlo Regular from the macOS system catalog, or null when unavailable. */
+        /**
+         * Opens Menlo Regular deterministically: the default system catalog caps acceptance at
+         * 32 faces in filesystem enumeration order, so a full-directory scan finds Menlo only
+         * intermittently. Copying Menlo.ttc into its own temporary root (the same route the
+         * library's own journey tests use) makes the capture exact; a limits-raised system scan
+         * remains as fallback. Prints why the HUD disabled itself on failure.
+         */
         fun open(fontPx: Float = 18f): HudText? {
             val requirements = FontAccessRequirementsSnapshot.renderable(
                 OutlineProfile(
@@ -133,15 +144,98 @@ class HudText private constructor(
                     maxCompositeComponents = 16_384,
                 ),
             )
-            val catalog = MacosSystemFontCatalog.open().valueOrNull() ?: return null
-            val record = catalog.faces.firstOrNull {
-                it.metadata.familyName == "Menlo" && it.metadata.styleName == "Regular"
-            } ?: catalog.faces.firstOrNull { it.metadata.familyName == "Menlo" } ?: return null
+            val failures = ArrayList<String>()
+            for (attempt in captureAttempts()) {
+                val opened = attempt.open()
+                val catalog = (opened as? FontOperationResult.Success)?.value
+                if (catalog == null) {
+                    failures += "catalog refused (${attempt.label}): $opened"
+                    attempt.tempDir?.toFile()?.deleteRecursively()
+                    continue
+                }
+                val record = catalog.faces.firstOrNull { face ->
+                    attempt.families.any { family ->
+                        face.metadata.familyName == family && face.metadata.styleName == "Regular"
+                    }
+                } ?: catalog.faces.firstOrNull { face -> attempt.families.contains(face.metadata.familyName) }
+                if (record == null) {
+                    val families = catalog.faces.take(6).joinToString { it.metadata.familyName }
+                    failures += "font absent (${attempt.label}, ${catalog.faces.size} faces: $families…)"
+                    attempt.tempDir?.toFile()?.deleteRecursively()
+                    continue
+                }
+                val hud = openFrom(catalog, record, requirements, fontPx, attempt.tempDir)
+                if (hud == null) {
+                    failures += "face/instance/session refused (${attempt.label})"
+                }
+                return hud
+            }
+            println("hud disabled: ${failures.joinToString("; ")}")
+            return null
+        }
+
+        private class CaptureAttempt(
+            val label: String,
+            val families: List<String>,
+            val tempDir: java.nio.file.Path?,
+            val open: () -> FontOperationResult<org.graphiks.kalligraphie.api.FontCatalogSnapshot>,
+        )
+
+        /**
+         * Liberation Sans ships in the resources (OFL-1.1, the font Kalligraphie's own benches
+         * exercise most) and is extracted to a private directory — deterministic on every JVM.
+         * The macOS system scan stays as a fallback: its default caps accept only 32 faces in
+         * enumeration order, and on recent macOS the SFNT name tables of system fonts such as
+         * Menlo are rejected, so raised limits are passed but success is not guaranteed.
+         */
+        private fun captureAttempts(): List<CaptureAttempt> {
+            val attempts = ArrayList<CaptureAttempt>()
+            runCatching {
+                val resource = requireNotNull(javaClass.getResourceAsStream("/fonts/LiberationSans-Regular.ttf")) {
+                    "bundled font missing"
+                }
+                val dir = java.nio.file.Files.createTempDirectory("hellodawn4k-font")
+                java.nio.file.Files.copy(resource, dir.resolve("LiberationSans-Regular.ttf"))
+                attempts.add(
+                    CaptureAttempt(
+                        label = "Liberation Sans embarquée",
+                        families = listOf("Liberation Sans"),
+                        tempDir = dir,
+                        open = {
+                            FontDirectoryCatalog.open(FontDirectoryCatalogOptions(roots = listOf(dir.toString())))
+                        },
+                    ),
+                )
+            }
+            val raisedLimits = MacosSystemFontCatalogOptions(
+                maxPathsToVisit = 2048,
+                maxFaces = 512,
+                maxFacesToExamine = 2048,
+                maxTotalSourceBytes = 512 * 1024 * 1024,
+            )
+            attempts.add(
+                CaptureAttempt(
+                    label = "scan système macOS",
+                    families = listOf("Menlo", "Monaco", "Courier New"),
+                    tempDir = null,
+                    open = { MacosSystemFontCatalog.open(raisedLimits) },
+                ),
+            )
+            return attempts
+        }
+
+        private fun openFrom(
+            catalog: org.graphiks.kalligraphie.api.FontCatalogSnapshot,
+            record: org.graphiks.kalligraphie.api.FontFaceRecord,
+            requirements: FontAccessRequirementsSnapshot,
+            fontPx: Float,
+            tempRoot: java.nio.file.Path?,
+        ): HudText? {
             val resolver = catalog.openAssetResolver().valueOrNull() ?: return null
             val resolved = catalog.resolveFace(record.id, requirements).valueOrNull() ?: return null
             val font = resolved.instantiate(FontInstanceDescriptor(LayoutUnit(fontPx))).valueOrNull() ?: return null
             val session = EditableLineLayoutSession.open().valueOrNull() ?: return null
-            return HudText(fontPx, font, resolver, session, requirements)
+            return HudText(fontPx, font, resolver, session, requirements, tempRoot)
         }
 
         private fun <T> FontOperationResult<T>.valueOrNull(): T? = (this as? FontOperationResult.Success<T>)?.value
@@ -214,7 +308,9 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
             extentWidth.toFloat(), extentHeight.toFloat(), 0f, 0f,
             1.0f, 1.0f, 1.0f, 0.85f,
         )))
-        val hudPass = passes.getOrPut(format) { createPass(format) }
+        val hudPass = passes.getOrPut(format) {
+            createPass(format)
+        }
         pass.setPipeline(hudPass.pipeline)
         pass.setBindGroup(0u, hudPass.binding)
         pass.draw((floats.size / 4).toUInt())
