@@ -43,6 +43,7 @@ tasks.register<JavaExec>("runWindow") {
     // Optional orbit override: -Pcornell.orbit=azimuth,elevation,radius (radians)
     providers.gradleProperty("cornell.orbit").orNull?.let { systemProperty("cornell.orbit", it) }
     providers.gradleProperty("cornell.hud").orNull?.let { systemProperty("cornell.hud", it) }
+    providers.gradleProperty("cornell.mode").orNull?.let { systemProperty("cornell.mode", it) }
 }
 
 // Noise comparison between two framebuffer dumps: ./gradlew noiseMetric a.png b.png

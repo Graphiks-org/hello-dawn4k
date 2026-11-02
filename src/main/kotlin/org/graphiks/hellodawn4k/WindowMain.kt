@@ -20,10 +20,12 @@ import org.graphiks.dawn4k.toolkit.surface.DawnFrame
 import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
 import org.graphiks.webgpu.ArrayBuffer
 import org.graphiks.webgpu.GPUBufferUsage
+import org.graphiks.webgpu.GPUFilterMode
 import org.graphiks.webgpu.GPUMapMode
 import org.graphiks.webgpu.GPULoadOp
 import org.graphiks.webgpu.GPUStoreOp
 import org.graphiks.webgpu.GPUTextureFormat
+import org.graphiks.webgpu.GPUTextureUsage
 import org.graphiks.webgpu.descriptors.BindGroupDescriptor
 import org.graphiks.webgpu.descriptors.BindGroupEntry
 import org.graphiks.webgpu.descriptors.BufferDescriptor
@@ -36,9 +38,11 @@ import org.graphiks.webgpu.descriptors.ProgrammableStage
 import org.graphiks.webgpu.descriptors.RenderPassDescriptor
 import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
 import org.graphiks.webgpu.descriptors.RenderPipelineDescriptor
+import org.graphiks.webgpu.descriptors.SamplerDescriptor
 import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
 import org.graphiks.webgpu.descriptors.TexelCopyBufferInfo
 import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
+import org.graphiks.webgpu.descriptors.TextureDescriptor
 import org.graphiks.webgpu.descriptors.VertexState
 import java.nio.file.Files
 import java.nio.file.Path
@@ -51,7 +55,11 @@ const val WINDOW_SAMPLES_PER_FRAME = 8
 private const val GLFW_RELEASE = 0
 private const val GLFW_BUTTON_LEFT = 0
 private const val GLFW_KEY_R = 82
+private const val GLFW_KEY_M = 77
 private const val GLFW_KEY_ESCAPE = 256
+
+/** Rendering mode: per-pixel path tracing, or the camera-independent radiosity lightmap. */
+enum class RenderMode { PATH_TRACING, LIGHTMAP }
 
 /**
  * Windowed Cornell box: each frame dispatches [WINDOW_SAMPLES_PER_FRAME] path-traced
@@ -62,6 +70,7 @@ private const val GLFW_KEY_ESCAPE = 256
  */
 fun main() = runBlocking {
     val frameLimit = System.getProperty("cornell.frames")?.toIntOrNull() ?: 0
+    val initialMode = if (System.getProperty("cornell.mode") == "lightmap") RenderMode.LIGHTMAP else RenderMode.PATH_TRACING
     val camera = OrbitCamera()
     // Smoke-test hook: render the finite run from an explicit orbit position.
     System.getProperty("cornell.orbit")
@@ -80,7 +89,7 @@ fun main() = runBlocking {
         val controls = OrbitControls(window, camera)
         val watcher = launch { controls.collect() }
         try {
-            renderCornellFrames(gpu, presentation, frameLimit, controls)
+            renderCornellFrames(gpu, presentation, frameLimit, controls, initialMode)
         } finally {
             watcher.cancelAndJoin()
         }
@@ -91,6 +100,7 @@ fun main() = runBlocking {
 private class OrbitControls(private val window: DawnWindow, val camera: OrbitCamera = OrbitCamera()) {
     @Volatile var closeRequested = false
     @Volatile var cameraDirty = true
+    @Volatile var toggleMode = false
     private var dragging = false
     private var lastPointer: Pair<Double, Double>? = null
 
@@ -118,6 +128,7 @@ private class OrbitControls(private val window: DawnWindow, val camera: OrbitCam
                         camera.reset()
                         cameraDirty = true
                     }
+                    GLFW_KEY_M -> toggleMode = true
                     GLFW_KEY_ESCAPE -> window.requestClose()
                 }
                 DawnWindowEvent.CloseRequested -> closeRequested = true
@@ -133,6 +144,7 @@ private suspend fun renderCornellFrames(
     presentation: DawnPresentation,
     frameLimit: Int,
     controls: OrbitControls,
+    initialMode: RenderMode = RenderMode.PATH_TRACING,
 ) {
     require(frameLimit >= 0)
     val renderer = CornellWindowRenderer(gpu, checkNotNull(presentation.configuration.value).format)
@@ -141,14 +153,30 @@ private suspend fun renderCornellFrames(
     val adapterName = gpu.adapter.info.description
     var presented = 0u
     var accumulated = 0u
+    var mode = initialMode
     var hudVertices = FloatArray(0)
     var emaFrameMs = 16.0
     var lastHudAt = System.nanoTime()
+
+    fun statusText(samples: Int): String {
+        val fps = (1000.0 / emaFrameMs).toInt()
+        return when (mode) {
+            RenderMode.PATH_TRACING -> "$fps fps · $samples spp · ${WIDTH}x$HEIGHT"
+            RenderMode.LIGHTMAP -> "$fps fps · ${(renderer.photonsEmitted / 1_000_000.0).toInt()}M photons · ${WIDTH}x$HEIGHT"
+        }
+    }
+
     try {
         while (currentCoroutineContext().isActive &&
             !controls.closeRequested &&
             (frameLimit == 0 || presented < frameLimit.toUInt())
         ) {
+            if (controls.toggleMode) {
+                controls.toggleMode = false
+                mode = if (mode == RenderMode.PATH_TRACING) RenderMode.LIGHTMAP else RenderMode.PATH_TRACING
+                if (mode == RenderMode.PATH_TRACING) accumulated = 0u
+                lastHudAt = 0L // force a HUD refresh with the new mode
+            }
             if (controls.cameraDirty) {
                 controls.cameraDirty = false
                 renderer.updateCamera(controls.camera.basis())
@@ -158,7 +186,7 @@ private suspend fun renderCornellFrames(
             }
             val frameStartedAt = System.nanoTime()
             if (presentation.withFrame { frame ->
-                    renderer.renderFrame(frame, accumulated + 1u, hudRenderer, hudVertices)
+                    renderer.renderFrame(frame, accumulated + 1u, mode, hudRenderer, hudVertices)
                     frame.present()
                 }) {
                 presented++
@@ -170,7 +198,7 @@ private suspend fun renderCornellFrames(
                 lastHudAt = System.nanoTime()
                 val samples = ((accumulated + 1u) * WINDOW_SAMPLES_PER_FRAME.toUInt()).toInt()
                 val lines = listOf(
-                    hudText!!.layoutLine("${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${WIDTH}x$HEIGHT"),
+                    hudText!!.layoutLine(statusText(samples)),
                     hudText.layoutLine(
                         "az %.0f°  el %.0f°  zoom %.1f".format(
                             Math.toDegrees(controls.camera.azimuth.toDouble()),
@@ -186,11 +214,11 @@ private suspend fun renderCornellFrames(
         }
         println("hello-dawn4k frames=$presented")
         if (frameLimit > 0) {
-            // Refresh the HUD so the dump reports the final sample count, not the last 2 Hz update.
+            // Refresh the HUD so the dump reports the final state, not the last 2 Hz update.
             if (hudRenderer != null) {
                 val samples = ((accumulated + 1u) * WINDOW_SAMPLES_PER_FRAME.toUInt()).toInt()
                 val lines = listOf(
-                    hudText!!.layoutLine("${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${WIDTH}x$HEIGHT"),
+                    hudText!!.layoutLine(statusText(samples)),
                     hudText.layoutLine(
                         "az %.0f°  el %.0f°  zoom %.1f".format(
                             Math.toDegrees(controls.camera.azimuth.toDouble()),
@@ -240,6 +268,87 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
 
+    // --- Radiosity lightmap (photon.wgsl / lightmapview.wgsl), ported from webgpu-samples ---
+    private val lightmapSize = 128u
+    private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
+    private val photonAccumulation = session.device.createBuffer(
+        BufferDescriptor(
+            3uL * 4uL * lightmapSize * lightmapSize * scene.quadCount.toULong(),
+            GPUBufferUsage.Storage,
+        ),
+    )
+    private val lightmapTexture = session.device.createTexture(
+        TextureDescriptor(
+            size = Extent3D(lightmapSize, lightmapSize, scene.quadCount.toUInt()),
+            format = GPUTextureFormat.RGBA16Float,
+            usage = GPUTextureUsage.StorageBinding or GPUTextureUsage.TextureBinding,
+        ),
+    )
+    private val lightmapView = lightmapTexture.createView()
+    private val lightmapSampler = session.device.createSampler(SamplerDescriptor(
+        magFilter = GPUFilterMode.Linear,
+        minFilter = GPUFilterMode.Linear,
+    ))
+    private val photonParams = session.device.createBuffer(
+        BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+    private val photonShader = session.device.createShaderModule(
+        ShaderModuleDescriptor(requireNotNull(javaClass.getResourceAsStream("/photon.wgsl")) { "missing photon.wgsl" }.readBytes().decodeToString()),
+    )
+    private val lightmapViewShader = session.device.createShaderModule(
+        ShaderModuleDescriptor(requireNotNull(javaClass.getResourceAsStream("/lightmapview.wgsl")) { "missing lightmapview.wgsl" }.readBytes().decodeToString()),
+    )
+    private val photonPipeline = session.device.createComputePipeline(
+        ComputePipelineDescriptor(ProgrammableStage(photonShader, "radiosity")),
+    )
+    private val normalizePipeline = session.device.createComputePipeline(
+        ComputePipelineDescriptor(ProgrammableStage(photonShader, "publishLightmap")),
+    )
+    private val lightmapViewPipeline = session.device.createComputePipeline(
+        ComputePipelineDescriptor(ProgrammableStage(lightmapViewShader, "main")),
+    )
+    private val photonLayout = photonPipeline.getBindGroupLayout(0u)
+    private val photonBinding = session.device.createBindGroup(
+        BindGroupDescriptor(
+            photonLayout,
+            listOf(
+                BindGroupEntry(0u, quads),
+                BindGroupEntry(1u, photonAccumulation),
+                BindGroupEntry(2u, lightmapView),
+                BindGroupEntry(3u, photonParams),
+            ),
+        ),
+    )
+    private val normalizeLayout = normalizePipeline.getBindGroupLayout(0u)
+    private val normalizeBinding = session.device.createBindGroup(
+        BindGroupDescriptor(
+            normalizeLayout,
+            listOf(
+                // publishLightmap never reads the scene: no binding 0 in its reflected layout.
+                BindGroupEntry(1u, photonAccumulation),
+                BindGroupEntry(2u, lightmapView),
+                BindGroupEntry(3u, photonParams),
+            ),
+        ),
+    )
+    private val lightmapViewLayout = lightmapViewPipeline.getBindGroupLayout(0u)
+    private val lightmapViewBinding = session.device.createBindGroup(
+        BindGroupDescriptor(
+            lightmapViewLayout,
+            listOf(
+                BindGroupEntry(0u, quads),
+                BindGroupEntry(1u, radiance),
+                BindGroupEntry(2u, params),
+                BindGroupEntry(3u, cameraBuffer),
+                BindGroupEntry(4u, lightmapView),
+                BindGroupEntry(5u, lightmapSampler),
+            ),
+        ),
+    )
+    private var accumulationMean = 0.0
+    var photonsEmitted = 0.0
+        private set
+
     private val traceShader = session.device.createShaderModule(ShaderModuleDescriptor(resource("/cornell.wgsl")))
     private val presentShader = session.device.createShaderModule(ShaderModuleDescriptor(resource("/present.wgsl")))
     private val tracePipeline = session.device.createComputePipeline(
@@ -277,25 +386,72 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         session.queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
     }
 
+    /**
+     * Photon-mapping radiosity, run every frame regardless of the render mode:
+     * 256 workgroups x 256 photons bounce from the light into the atomic accumulation
+     * buffer, then a normalize pass publishes the progressive mean to the lightmap.
+     * Seeds are fresh CPU randoms each frame (the sample's route) so successive frames
+     * never retrace the same photons. Mirrors the webgpu-samples overflow rescaling.
+     */
+    private fun runRadiosity(pass: org.graphiks.webgpu.GPUComputePassEncoder) {
+        val photonsPerFrame = 256u * 1024u
+        accumulationMean += (photonsPerFrame.toDouble() * 100000.0) / photonTexels
+        val toLightmapScale = 1.0 / accumulationMean
+        val bufferScale = if (accumulationMean > 2 * 0x10000000) 0.5 else 1.0
+        accumulationMean *= bufferScale
+        photonsEmitted += photonsPerFrame.toDouble()
+        val seeds = kotlin.random.Random.Default
+        session.queue.writeBuffer(photonParams, 0uL, ArrayBuffer.of(floatArrayOf(
+            toLightmapScale.toFloat(),
+            bufferScale.toFloat(),
+            Float.fromBits(scene.quadCount),
+            Float.fromBits(scene.lightIndex),
+            Float.fromBits(seeds.nextInt()),
+            Float.fromBits(seeds.nextInt()),
+            Float.fromBits(seeds.nextInt()),
+            0f,
+        )))
+        pass.setPipeline(photonPipeline)
+        pass.setBindGroup(0u, photonBinding)
+        pass.dispatchWorkgroups(1024u)
+        pass.setPipeline(normalizePipeline)
+        pass.setBindGroup(0u, normalizeBinding)
+        pass.dispatchWorkgroups(
+            lightmapSize / 8u,
+            lightmapSize / 8u,
+            scene.quadCount.toUInt(),
+        )
+    }
+
     /** One accumulation frame plus one presentation pass (then the HUD), in a single command buffer. */
-    fun renderFrame(frame: DawnFrame, frameIndex: UInt, hud: HudRenderer?, hudVertices: FloatArray) {
+    fun renderFrame(frame: DawnFrame, frameIndex: UInt, mode: RenderMode, hud: HudRenderer?, hudVertices: FloatArray) {
         session.queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
             scene.quadCount.toUInt(),
             WIDTH.toUInt(),
             HEIGHT.toUInt(),
-            WINDOW_SAMPLES_PER_FRAME.toUInt(),
+            if (mode == RenderMode.PATH_TRACING) WINDOW_SAMPLES_PER_FRAME.toUInt() else 1u,
             scene.lightIndex.toUInt(), 0u, 0u, 0u,
             frameIndex, 0u, 0u, 0u,
         )))
         (session.device.createCommandEncoder() as DawnCommandEncoder).use { encoder ->
             encoder.beginComputePass().use { pass ->
                 try {
-                    pass.setPipeline(tracePipeline)
-                    pass.setBindGroup(0u, traceBinding)
-                    pass.dispatchWorkgroups(
-                        ((WIDTH + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
-                        ((HEIGHT + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
-                    )
+                    runRadiosity(pass)
+                    if (mode == RenderMode.PATH_TRACING) {
+                        pass.setPipeline(tracePipeline)
+                        pass.setBindGroup(0u, traceBinding)
+                        pass.dispatchWorkgroups(
+                            ((WIDTH + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
+                            ((HEIGHT + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
+                        )
+                    } else {
+                        pass.setPipeline(lightmapViewPipeline)
+                        pass.setBindGroup(0u, lightmapViewBinding)
+                        pass.dispatchWorkgroups(
+                            ((WIDTH + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
+                            ((HEIGHT + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
+                        )
+                    }
                 } finally {
                     pass.end()
                 }
@@ -427,8 +583,24 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         presentLayout.close()
         presentPipeline.close()
         tracePipeline.close()
+        lightmapViewBinding.close()
+        lightmapViewLayout.close()
+        lightmapViewPipeline.close()
+        normalizePipeline.close()
+        photonPipeline.close()
+        lightmapViewShader.close()
+        photonShader.close()
+        photonBinding.close()
+        photonLayout.close()
+        normalizeBinding.close()
+        normalizeLayout.close()
         presentShader.close()
         traceShader.close()
+        photonParams.close()
+        lightmapSampler.close()
+        lightmapView.close()
+        lightmapTexture.close()
+        photonAccumulation.close()
         cameraBuffer.close()
         dims.close()
         radiance.close()
