@@ -323,6 +323,14 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
      * and packed first.
      */
     fun buildVertices(lines: List<List<HudGlyph>>, baseX: Float, baseY: Float, lineHeight: Float): FloatArray {
+        if (System.getenv("CORNELL_HUD_DEBUG") != null) {
+            for ((index, line) in lines.withIndex()) {
+                for (glyph in line) {
+                    val image = text.rasterize(glyph.outline) ?: continue
+                    println("huddbg line=$index glyph=${glyph.glyphId} penX=${glyph.penX} penY=${glyph.penY} left=${image.left} top=${image.top} w=${image.width} h=${image.height}")
+                }
+            }
+        }
         val out = ArrayList<Float>(lines.sumOf { it.size } * 24)
         lines.forEachIndexed { index, line ->
             val baseline = baseY + index * lineHeight
@@ -377,7 +385,9 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
             image.width.toFloat(),
             image.height.toFloat(),
             image.left,
-            -image.top,
+            // A8Image.top is the y-up coordinate of the ink's BOTTOM edge (negative for
+            // descenders); the y-down top of the quad is the ink's top edge, -(top + height).
+            -(image.top + image.height),
         )
         placements[glyphId] = placement
         atlasDirty = true
