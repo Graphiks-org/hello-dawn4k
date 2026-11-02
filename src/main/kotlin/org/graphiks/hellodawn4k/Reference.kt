@@ -206,7 +206,8 @@ object Reference {
             val cpu = DoubleArray(3) { sum[it] / samples }
             val gpu = DoubleArray(3) { gpuRadiance[(y * WIDTH + x) * 4 + it].toDouble() }
             val noise = 4.0 / sqrt(samples.toDouble()) * maxOf(1.0, cpu.max())
-            val ok = (0..2).all { kotlin.math.abs(cpu[it] - gpu[it]) <= noise * 3 }
+            val ok = (0..2).all { kotlin.math.abs(cpu[it] - gpu[it]) <= noise * 1.5 } &&
+                gpu.max() > noise * 0.25 // an all-zero GPU image must never pass
             println(
                 "px($x,$y) $label: primary=${primary?.second ?: "rate"} cpu=[${cpu.contentToString()}] gpu=[${gpu.contentToString()}] -> " +
                     if (ok) "OK" else "ECART"

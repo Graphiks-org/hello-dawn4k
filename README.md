@@ -34,11 +34,22 @@ orbitale :
 | `Échap` ou croix | fermer |
 
 Chaque mouvement de caméra relance l'accumulation (l'image redevient bruitée
-puis reconverge). La touche **`M`** bascule entre deux techniques (comme la
-[démo Cornell officielle WebGPU](https://webgpu.github.io/webgpu-samples/?sample=cornell)) :
+puis reconverge). La touche **`M`** cycle entre trois rendus, dont deux portés
+de la [démo Cornell officielle WebGPU](https://webgpu.github.io/webgpu-samples/?sample=cornell)
+(architecture alignée : `common.wgsl` partagé par concaténation, photons →
+lightmap par surface, rasterizer MVP et raytracer) :
 
-- **path tracing** — accumulation progressive dans l'espace écran (physique, grain transitoire au mouvement) ;
-- **lightmap radiosity** — des photons émis par la lampe convergent dans une lightmap **par surface** (`photon.wgsl`, atomiques u32 + flou de gather), indépendamment de la caméra ; la vue ajoute l'éclairage direct analytique et échantillonne l'indirect (`lightmapview.wgsl`). La caméra bouge alors **sans aucun grain**, à ~800 fps.
+- **path tracing** — notre mode physique, accumulation progressive dans l'espace écran (grain transitoire au mouvement) ;
+- **rasterizer** (le défaut du sample) — maille de quads indexée, MVP classique, fragment échantillonnant la lightmap ; depth buffer, ~900 fps ;
+- **raytracer** — un rayon primaire par pixel sur la même lightmap.
+
+Les trois partagent une passe **radiosity** qui converge en permanence,
+indépendamment de la caméra : des photons émis par la lampe déposent leur
+énergie (post-albédo, ordre du sample) dans des atomiques u32, publiés vers
+une lightmap rgba16float 256² × une couche par quad (rescaling anti-overflow
+du sample, seeds CPU fraîches par frame). Écarts assumés et documentés dans
+les shaders : pas de back-face culling (windings de scène non uniformes) et
+seeds de RNG mélangées à la frame.
 
 Un **HUD** en haut à gauche affiche mode, framerate, échantillons ou photons
 accumulés, état de la caméra et adaptateur GPU : le texte est mis en page par
@@ -51,8 +62,9 @@ dump du framebuffer, avec position orbitale et mode initiaux optionnels :
 ```bash
 # écrit cornell-window.png depuis azimut 0.7 rad, élévation 0.25 rad, rayon 2.6
 ./gradlew runWindow -Pcornell.frames=600 -Pcornell.orbit=0.7,0.25,2.6
-# idem, en démarrant en mode lightmap radiosity
+# idem, en démarrant en mode lightmap (rasterizer ou raytracer)
 ./gradlew runWindow -Pcornell.frames=600 -Pcornell.mode=lightmap
+./gradlew runWindow -Pcornell.frames=600 -Pcornell.mode=raytracer
 ```
 
 Prérequis : JDK 25 (le toolchain Gradle le télécharge si besoin) et un GPU
@@ -62,10 +74,12 @@ ou un adaptateur logiciel Metal/Vulkan.
 
 | Fichier | Rôle |
 | --- | --- |
+| `src/main/resources/common.wgsl` | module partagé (quads, intersection, RNG, caméra), concaténé avant chaque passe |
 | `src/main/resources/cornell.wgsl` | le path tracer (compute shader, accumulation progressive) |
-| `src/main/resources/photon.wgsl` | radiosity photon → lightmap (atomiques + flou de gather) |
-| `src/main/resources/lightmapview.wgsl` | vue lightmap : direct NEE + indirect échantillonné |
-| `src/main/resources/present.wgsl` | passe de présentation : triangle plein écran + tonemap |
+| `src/main/resources/radiosity.wgsl` | photons → lightmap (atomiques, sémantiques du sample) |
+| `src/main/resources/raytracer.wgsl` | vue ray-tracée : un rayon primaire, échantillonne la lightmap |
+| `src/main/resources/rasterizer.wgsl` | vue rasterizée : MVP sur maille indexée, lightmap au fragment |
+| `src/main/resources/present.wgsl` | tonemap plein écran (l'équivalent de leur tonemapper) |
 | `src/main/resources/hud.wgsl` | passe HUD : quads texturés alpha-blendés |
 | `src/main/kotlin/org/graphiks/hellodawn4k/CornellBox.kt` | la scène : quads, matériaux, boîtes tournées |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Camera.kt` | base de caméra partagée + contrôles orbitaux |

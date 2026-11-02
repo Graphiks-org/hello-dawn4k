@@ -2,6 +2,7 @@ package org.graphiks.hellodawn4k
 
 import kotlinx.coroutines.runBlocking
 import org.graphiks.dawn4k.DawnCommandEncoder
+import org.graphiks.dawn4k.toolkit.DawnSessionOptions
 import org.graphiks.dawn4k.toolkit.withDawnSession
 import org.graphiks.webgpu.ArrayBuffer
 import org.graphiks.webgpu.GPUBufferUsage
@@ -15,6 +16,7 @@ import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.readText
+import kotlin.time.Duration.Companion.seconds
 
 const val WIDTH = 640
 const val HEIGHT = 480
@@ -23,10 +25,18 @@ const val WORKGROUP_SIZE = 8
 
 fun main() = runBlocking {
     val scene = CornellBox.scene()
-    val wgsl = Path.of("src/main/resources/cornell.wgsl").readText()
+    val wgsl = Path.of("src/main/resources/common.wgsl").readText() + "\n" +
+        Path.of("src/main/resources/cornell.wgsl").readText()
 
     // The scoped session owns bootstrap, the GPU owner thread, progression and shutdown.
-    val radiance = withDawnSession { session ->
+    val radiance = withDawnSession(
+        DawnSessionOptions(
+            startupTimeout = 60.seconds,
+            adapterOptions = org.graphiks.webgpu.descriptors.RequestAdapterOptions(
+                powerPreference = org.graphiks.webgpu.GPUPowerPreference.HighPerformance,
+            ),
+        ),
+    ) { session ->
         session.run { gpu ->
             val quadBytes = (scene.quadData.size * 4).toULong()
             val radianceBytes = (WIDTH * HEIGHT * 16).toULong()
