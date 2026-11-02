@@ -136,8 +136,14 @@ private suspend fun renderCornellFrames(
 ) {
     require(frameLimit >= 0)
     val renderer = CornellWindowRenderer(gpu, checkNotNull(presentation.configuration.value).format)
+    val hudText = if (System.getProperty("cornell.hud") != "false") HudText.open() else null
+    val hudRenderer = hudText?.let { HudRenderer(gpu, it) }
+    val adapterName = gpu.adapter.info.description
     var presented = 0u
     var accumulated = 0u
+    var hudVertices = FloatArray(0)
+    var emaFrameMs = 16.0
+    var lastHudAt = System.nanoTime()
     try {
         while (currentCoroutineContext().isActive &&
             !controls.closeRequested &&
@@ -148,30 +154,51 @@ private suspend fun renderCornellFrames(
                 renderer.updateCamera(controls.camera.basis())
                 accumulated = 0u
             }
+            val frameStartedAt = System.nanoTime()
             if (presentation.withFrame { frame ->
-                    renderer.renderFrame(frame, accumulated + 1u)
+                    renderer.renderFrame(frame, accumulated + 1u, hudRenderer, hudVertices)
                     frame.present()
                 }) {
                 presented++
                 accumulated++
             }
+            val frameMs = (System.nanoTime() - frameStartedAt) / 1_000_000.0
+            emaFrameMs = emaFrameMs * 0.9 + frameMs * 0.1
+            if (hudRenderer != null && System.nanoTime() - lastHudAt > 500_000_000L) {
+                lastHudAt = System.nanoTime()
+                val samples = ((accumulated + 1u) * WINDOW_SAMPLES_PER_FRAME.toUInt()).toInt()
+                val lines = listOf(
+                    hudText!!.layoutLine("${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${WIDTH}x$HEIGHT"),
+                    hudText.layoutLine(
+                        "az %.0f°  el %.0f°  zoom %.1f".format(
+                            Math.toDegrees(controls.camera.azimuth.toDouble()),
+                            Math.toDegrees(controls.camera.elevation.toDouble()),
+                            controls.camera.radius,
+                        ),
+                    ),
+                    hudText.layoutLine(adapterName),
+                )
+                hudVertices = hudRenderer.buildVertices(lines, baseX = 12f, baseY = 30f, lineHeight = 26f)
+            }
             delay(16)
         }
         println("hello-dawn4k frames=$presented")
-        if (frameLimit > 0) gpu.run { renderer.dumpPresentedFrame("cornell-window.png") }
+        if (frameLimit > 0) gpu.run { renderer.dumpPresentedFrame("cornell-window.png", hudRenderer, hudVertices) }
     } finally {
         withContext(NonCancellable) {
             try {
                 gpu.queue.onSubmittedWorkDone().getOrThrow()
             } finally {
                 renderer.close()
+                hudRenderer?.close()
+                hudText?.close()
             }
         }
     }
 }
 
 /** Owns every GPU resource used by the windowed render loop; close before the session ends. */
-private class CornellWindowRenderer(private val session: DawnSession, format: GPUTextureFormat) : AutoCloseable {
+private class CornellWindowRenderer(private val session: DawnSession, private val format: GPUTextureFormat) : AutoCloseable {
     private var closed = false
     private val scene = CornellBox.scene()
     private val quadBytes = (scene.quadData.size * 4).toULong()
@@ -230,8 +257,8 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
         session.queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
     }
 
-    /** One accumulation frame plus one presentation pass, submitted in a single command buffer. */
-    fun renderFrame(frame: DawnFrame, frameIndex: UInt) {
+    /** One accumulation frame plus one presentation pass (then the HUD), in a single command buffer. */
+    fun renderFrame(frame: DawnFrame, frameIndex: UInt, hud: HudRenderer?, hudVertices: FloatArray) {
         session.queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
             scene.quadCount.toUInt(),
             WIDTH.toUInt(),
@@ -269,6 +296,22 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
                     pass.end()
                 }
             }
+            if (hud != null && hudVertices.isNotEmpty()) {
+                encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
+                    RenderPassColorAttachment(
+                        frame.view,
+                        loadOp = GPULoadOp.Load,
+                        storeOp = GPUStoreOp.Store,
+                        clearValue = Color(0.0, 0.0, 0.0, 1.0),
+                    ),
+                ))).use { pass ->
+                    try {
+                        hud.draw(pass, format, frame.extent.width, frame.extent.height, hudVertices)
+                    } finally {
+                        pass.end()
+                    }
+                }
+            }
             encoder.finish().use { session.queue.submit(listOf(it)) }
         }
     }
@@ -278,7 +321,7 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
      * (the swapchain pipeline format cannot write there, so a twin pipeline is built) and
      * writes exactly what the window shows to [path], row padding already absent at 640 px.
      */
-    suspend fun dumpPresentedFrame(path: String) {
+    suspend fun dumpPresentedFrame(path: String, hud: HudRenderer?, hudVertices: FloatArray) {
         session.createRenderTexture(WIDTH.toUInt(), HEIGHT.toUInt(), GPUTextureFormat.RGBA8Unorm).use { target ->
             session.device.createRenderPipeline(
                 RenderPipelineDescriptor(
@@ -315,6 +358,22 @@ private class CornellWindowRenderer(private val session: DawnSession, format: GP
                                             pass.draw(3u)
                                         } finally {
                                             pass.end()
+                                        }
+                                    }
+                                    if (hud != null && hudVertices.isNotEmpty()) {
+                                        encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
+                                            RenderPassColorAttachment(
+                                                view,
+                                                loadOp = GPULoadOp.Load,
+                                                storeOp = GPUStoreOp.Store,
+                                                clearValue = Color(0.0, 0.0, 0.0, 1.0),
+                                            ),
+                                        ))).use { pass ->
+                                            try {
+                                                hud.draw(pass, GPUTextureFormat.RGBA8Unorm, WIDTH, HEIGHT, hudVertices)
+                                            } finally {
+                                                pass.end()
+                                            }
                                         }
                                     }
                                     encoder.copyTextureToBuffer(

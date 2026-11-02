@@ -33,8 +33,13 @@ orbitale :
 | `Échap` ou croix | fermer |
 
 Chaque mouvement de caméra relance l'accumulation (l'image redevient bruitée
-puis reconverge). Run fumée fini + dump du framebuffer, avec position
-orbitale optionnelle :
+puis reconverge). Un **HUD** en haut à gauche affiche framerate, échantillons
+accumulés, état de la caméra et adaptateur GPU : le texte est mis en page par
+[Kalligraphie](https://github.com/Graphiks-org/Kalligraphie) (facade
+`EditableLineLayoutSession` + shaping HarfBuzz sur Menlo), rastérisé en
+coverage A8 sur CPU, servi dans un atlas R8 et dessiné en quads
+alpha-blendés (`-Dcornell.hud=false` pour le désactiver). Run fumée fini +
+dump du framebuffer, avec position orbitale optionnelle :
 
 ```bash
 # écrit cornell-window.png depuis azimut 0.7 rad, élévation 0.25 rad, rayon 2.6
@@ -50,10 +55,12 @@ ou un adaptateur logiciel Metal/Vulkan.
 | --- | --- |
 | `src/main/resources/cornell.wgsl` | le path tracer (compute shader, accumulation progressive) |
 | `src/main/resources/present.wgsl` | passe de présentation : triangle plein écran + tonemap |
+| `src/main/resources/hud.wgsl` | passe HUD : quads texturés alpha-blendés |
 | `src/main/kotlin/org/graphiks/hellodawn4k/CornellBox.kt` | la scène : quads, matériaux, boîtes tournées |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Camera.kt` | base de caméra partagée + contrôles orbitaux |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Main.kt` | session headless, dispatch GPU, readback, tonemapping |
 | `src/main/kotlin/org/graphiks/hellodawn4k/WindowMain.kt` | fenêtre GLFW avec convergence en direct |
+| `src/main/kotlin/org/graphiks/hellodawn4k/Hud.kt` | HUD : layout Kalligraphie + atlas de glyphes GPU |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Png.kt` | encodeur PNG minimal (sans dépendance) |
 | `src/main/kotlin/org/graphiks/hellodawn4k/Reference.kt` | path tracer CPU miroir pour la validation numérique |
 
@@ -70,6 +77,8 @@ test d'intersection quad/triangle lors du développement.
 
 ## Dépendances
 
-`org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT` (et `webgpu-descriptors`)
-résolues depuis les snapshots Maven Central de l'organisation ; la bibliothèque
-JVM embarque la bibliothèque native Dawn, rien d'autre à installer.
+`org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT`, `dawn4k-toolkit-glfw`,
+`kalligraphie` (+ `api`, `shaping`, `layout`, `raster-cpu` — le POM parapluie
+les déclare runtime-only) et `webgpu-descriptors`, résolues depuis les
+snapshots Maven Central de l'organisation ; les bibliothèques JVM embarquent
+Dawn, GLFW et HarfBuzz, rien d'autre à installer.

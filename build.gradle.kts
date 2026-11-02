@@ -16,6 +16,12 @@ application {
 dependencies {
     implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
     implementation("org.graphiks:dawn4k-toolkit-glfw:1.0.0-SNAPSHOT")
+    implementation("org.graphiks:kalligraphie:1.0.0-SNAPSHOT")
+    // The kalligraphie umbrella POM declares these runtime-only; the HUD needs them at compile time.
+    implementation("org.graphiks:api:1.0.0-SNAPSHOT")
+    implementation("org.graphiks:shaping:1.0.0-SNAPSHOT")
+    implementation("org.graphiks:layout:1.0.0-SNAPSHOT")
+    implementation("org.graphiks:raster-cpu:1.0.0-SNAPSHOT")
     // dawn4k exposes webgpu-descriptors only as an implementation dependency, so consumers redeclare it.
     implementation("org.graphiks:webgpu-descriptors:0.1.0-SNAPSHOT")
 }
