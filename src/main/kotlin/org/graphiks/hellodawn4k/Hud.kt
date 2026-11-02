@@ -361,8 +361,11 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
         if (cursorY + image.height.toUInt() > atlasHeight) return null // atlas full: skip the glyph
         val x = cursorX
         val pixels = image.copyPixels()
+        // The rasterizer preserves font-space y-up, so its raw output is vertically
+        // mirrored (Kalligraphie's own logo pipeline flips once); store the rows flipped
+        // and anchor the ink box with the bearing sign inverted for y-down screen space.
         for (row in 0 until image.height) {
-            val source = row * image.width
+            val source = (image.height - 1 - row) * image.width
             val target = ((cursorY + row.toUInt()) * atlasWidth + x).toInt()
             pixels.copyInto(atlasBytes, target, source, source + image.width)
         }
@@ -374,7 +377,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
             image.width.toFloat(),
             image.height.toFloat(),
             image.left,
-            image.top,
+            -image.top,
         )
         placements[glyphId] = placement
         atlasDirty = true

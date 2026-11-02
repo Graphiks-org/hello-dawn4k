@@ -45,7 +45,7 @@ import java.nio.file.Path
 import kotlin.time.Duration.Companion.seconds
 
 /** Samples traced per presented frame; the on-screen image converges as frames accumulate. */
-const val WINDOW_SAMPLES_PER_FRAME = 4
+const val WINDOW_SAMPLES_PER_FRAME = 8
 
 // GLFW constants forwarded as-is by the toolkit's window events.
 private const val GLFW_RELEASE = 0

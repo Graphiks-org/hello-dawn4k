@@ -34,10 +34,10 @@ class CameraBasis(val position: V3, val forward: V3, val tanHalfFov: Float) {
  */
 class OrbitCamera(
     var azimuth: Float = 0f,
-    var elevation: Float = 0.17f,
-    var radius: Float = 3.4f,
-    val target: V3 = V3(0f, 1.3f, 0f),
-    val tanHalfFov: Float = 0.42f,
+    var elevation: Float = 0.10f,
+    var radius: Float = 3.1f,
+    val target: V3 = V3(0f, 1.25f, 0f),
+    val tanHalfFov: Float = 0.30f,
 ) {
     /** Drag deltas in pixels; right orbits right, up raises the camera. */
     fun drag(dx: Double, dy: Double) {
@@ -51,8 +51,8 @@ class OrbitCamera(
 
     fun reset() {
         azimuth = 0f
-        elevation = 0.17f
-        radius = 3.4f
+        elevation = 0.10f
+        radius = 3.1f
     }
 
     fun basis(): CameraBasis {
