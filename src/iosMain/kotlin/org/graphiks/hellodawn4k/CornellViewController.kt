@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.graphiks.dawn4k.toolkit.surface.DawnMetalView
 import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
 import platform.CoreGraphics.CGRectMake
@@ -21,6 +22,8 @@ import platform.UIKit.UILabel
 import platform.UIKit.UITouch
 import platform.UIKit.UIViewController
 import platform.UIKit.addSubview
+import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * iOS host over the shared Cornell renderer: UIKit owns the DawnMetalView (Metal-backed),
@@ -127,17 +130,28 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
                 val renderer = CornellRenderer(gpu, checkNotNull(presentation.configuration.value).format)
+                val timeSource = kotlin.time.TimeSource.Monotonic
+                var lastStatusAt = timeSource.markNow()
+                var emaFrameMs = 16.0
                 try {
                     while (currentCoroutineContext().isActive) {
                         if (cameraDirty) {
                             cameraDirty = false
                             renderer.updateCamera(camera.basis())
                         }
+                        val frameStartedAt = timeSource.markNow()
                         presentation.withFrame { frame ->
                             renderer.renderFrame(frame, mode, camera)
                             frame.present()
                         }
                         renderer.consumeResize()
+                        emaFrameMs = emaFrameMs * 0.9 + (frameStartedAt.elapsedNow().inWholeNanoseconds / 1_000_000.0) * 0.1
+                        if (timeSource.markNow() - lastStatusAt > 500.milliseconds) {
+                            lastStatusAt = timeSource.markNow()
+                            val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, mode, camera)
+                                .joinToString("\n")
+                            withContext(Dispatchers.Main) { status.text = text }
+                        }
                         delay(16)
                     }
                 } finally {

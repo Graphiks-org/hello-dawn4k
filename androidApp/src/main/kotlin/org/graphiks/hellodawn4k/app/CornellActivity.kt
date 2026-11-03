@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.graphiks.dawn4k.toolkit.DawnSession
 import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
 import org.graphiks.dawn4k.toolkit.surface.DawnSurfaceView
@@ -23,6 +24,9 @@ import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
 import org.graphiks.hellodawn4k.CornellRenderer
 import org.graphiks.hellodawn4k.OrbitCamera
 import org.graphiks.hellodawn4k.RenderMode
+import org.graphiks.hellodawn4k.statusLines
+import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Android host over the shared Cornell renderer: the DawnSurfaceView supplies the
@@ -132,17 +136,28 @@ class CornellActivity : Activity() {
 
     private suspend fun renderCornell(gpu: DawnSession, presentation: DawnPresentation) {
         val renderer = CornellRenderer(gpu, checkNotNull(presentation.configuration.value).format)
+        val timeSource = kotlin.time.TimeSource.Monotonic
+        var lastStatusAt = timeSource.markNow()
+        var emaFrameMs = 16.0
         try {
             while (currentCoroutineContext().isActive) {
                 if (cameraDirty) {
                     cameraDirty = false
                     renderer.updateCamera(camera.basis())
                 }
+                val frameStartedAt = timeSource.markNow()
                 presentation.withFrame { frame ->
                     renderer.renderFrame(frame, mode, camera)
                     frame.present()
                 }
                 renderer.consumeResize()
+                emaFrameMs = emaFrameMs * 0.9 + (frameStartedAt.elapsedNow().inWholeNanoseconds / 1_000_000.0) * 0.1
+                if (timeSource.markNow() - lastStatusAt > 500.milliseconds) {
+                    lastStatusAt = timeSource.markNow()
+                    val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, mode, camera)
+                        .joinToString("\n")
+                    withContext(Dispatchers.Main) { status.text = text }
+                }
                 delay(16)
             }
         } finally {

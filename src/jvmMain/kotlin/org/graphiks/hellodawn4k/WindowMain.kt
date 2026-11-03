@@ -126,16 +126,8 @@ private suspend fun renderCornellFrames(
     var emaFrameMs = 16.0
     var lastHudAt = System.nanoTime()
 
-    fun hudLines(): List<String> = listOf(
-        "${(1000.0 / emaFrameMs).toInt()} fps · ${(renderer.photonsEmitted / 1_000_000.0).toInt()}M photons · " +
-            if (mode == RenderMode.RASTERIZER) "rasterizer" else "raytracer",
-        "az %.0f°  el %.0f°  zoom %.1f".format(
-            Math.toDegrees(controls.camera.azimuth.toDouble()),
-            Math.toDegrees(controls.camera.elevation.toDouble()),
-            controls.camera.radius,
-        ),
-        adapterName,
-    )
+    fun hudLines(): List<String> = statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, controls.camera) +
+        listOf(adapterName)
 
     try {
         while (currentCoroutineContext().isActive &&
