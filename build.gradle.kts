@@ -4,8 +4,8 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 plugins {
     kotlin("multiplatform") version "2.4.20"
     kotlin("android") version "2.4.20" apply false
-    id("com.android.application") version "8.7.3" apply false
-    id("com.android.library") version "8.7.3"
+    id("com.android.application") version "9.0.0" apply false
+    id("com.android.library") version "9.0.0"
 }
 
 kotlin {
@@ -28,8 +28,10 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                api("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
+                api("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                // dawn4k exposes webgpu-descriptors only as an implementation dependency, so consumers redeclare it.
+                api("org.graphiks:webgpu-descriptors:0.1.0-SNAPSHOT")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
             }
         }
@@ -50,7 +52,7 @@ kotlin {
 
 android {
     namespace = "org.graphiks.hellodawn4k"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig { minSdk = 28 }
 }
 
