@@ -75,8 +75,8 @@ object CornellBox {
         quad(V3(-1f, 0f, -1f), V3(0f, 0f, 2f), V3(0f, 2f, 0f), RED)     // left wall
         quad(V3(1f, 0f, -1f), V3(0f, 0f, 2f), V3(0f, 2f, 0f), GREEN)    // right wall
         quad(V3(-0.25f, 1.99f, -0.25f), V3(0.5f, 0f, 0f), V3(0f, 0f, 0.5f), BLACK, LIGHT_EMISSION)
-        box(V3(0.33f, 0.6f, -0.22f), V3(0.28f, 0.6f, 0.28f), Math.toRadians(33.0).toFloat(), WHITE)
-        box(V3(-0.34f, 0.3f, 0.30f), V3(0.28f, 0.3f, 0.28f), Math.toRadians(-18.0).toFloat(), WHITE)
+        box(V3(0.33f, 0.6f, -0.22f), V3(0.28f, 0.6f, 0.28f), 33f * kotlin.math.PI.toFloat() / 180f, WHITE)
+        box(V3(-0.34f, 0.3f, 0.30f), V3(0.28f, 0.3f, 0.28f), -18f * kotlin.math.PI.toFloat() / 180f, WHITE)
 
         check(lightIndex >= 0) { "the Cornell box needs exactly one emissive quad" }
         return Scene(floats.toFloatArray(), floats.size / Scene.FLOATS_PER_QUAD, lightIndex)

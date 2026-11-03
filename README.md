@@ -1,8 +1,9 @@
 # hello-dawn4k — Cornell box
 
-Projet minimal qui utilise le toolkit [dawn4k](https://github.com/Graphiks-org/dawn4k)
-(bindings Kotlin/JVM pour Dawn/WebGPU) pour rendre la fameuse **Cornell box** :
-l'architecture de la [démo Cornell officielle WebGPU](https://webgpu.github.io/webgpu-samples/?sample=cornell)
+Projet **Kotlin Multiplatform** qui utilise le toolkit
+[dawn4k](https://github.com/Graphiks-org/dawn4k) (bindings Dawn/WebGPU) pour
+rendre la fameuse **Cornell box** sur desktop, Android et iOS : l'architecture
+de la [démo Cornell officielle WebGPU](https://webgpu.github.io/webgpu-samples/?sample=cornell)
 portée sur dawn4k — des photons convergent une lightmap par surface, et deux
 rendus commutables la consultent.
 
@@ -14,20 +15,20 @@ rendus commutables la consultent.
 
 ## Lancer
 
-```bash
-./gradlew runWindow
-```
+| Plateforme | Commande | Entrées |
+| --- | --- | --- |
+| macOS / Linux / Windows (JVM) | `./gradlew runWindow` | drag = orbite, molette = zoom, `M` = mode, `R` = reset, `Échap` |
+| Android (Vulkan, API 28+) | `./gradlew :androidApp:assembleDebug` puis installer l'APK | 1 doigt = orbite, double tap = mode |
+| iOS / simulateur (Metal) | `cd iosApp && xcodegen generate && xcodebuild -scheme CornellIOS -sdk iphonesimulator build` | 1 doigt = orbite, double tap = mode |
 
-Prérequis : JDK 25 (le toolchain Gradle le télécharge si besoin) et un GPU
-ou un adaptateur logiciel Metal/Vulkan.
+Le projet Xcode (`iosApp/CornellBox.xcodeproj`) est généré depuis `project.yml`
+par [XcodeGen](https://github.com/yonaskolb/XcodeGen) et reste ignoré ; son script
+de pré-compilation appelle `embedAndSignAppleFrameworkForXcode`, qui construit le
+framework Kotlin `CornellBox.framework` (Dawn statique embarquée par les klibs
+publiées — vérifié par édition de liens + exécution sur simulateur iOS 27).
 
-| Entrée | Action |
-| --- | --- |
-| glisser (bouton gauche) | orbiter autour de la boîte |
-| molette | zoomer |
-| `M` | basculer rasterizer ↔ raytracer |
-| `R` | remettre la caméra par défaut |
-| `Échap` ou croix | fermer |
+Prérequis desktop : JDK 25 (le toolchain Gradle le télécharge si besoin) et un
+GPU ou un adaptateur logiciel Metal/Vulkan.
 
 La touche **`M`** bascule entre les deux rendus du sample, au-dessus d'une
 passe **radiosity** qui tourne en permanence : des photons émis par la lampe
@@ -60,19 +61,15 @@ optionnels :
 
 | Fichier | Rôle |
 | --- | --- |
-| `src/main/resources/common.wgsl` | module partagé (quads, intersection, RNG, caméra), concaténé avant chaque passe |
-| `src/main/resources/radiosity.wgsl` | photons → lightmap (atomiques, sémantiques du sample) |
-| `src/main/resources/raytracer.wgsl` | vue ray-tracée : un rayon primaire, échantillonne la lightmap |
-| `src/main/resources/rasterizer.wgsl` | vue rasterizée : MVP sur maille indexée, lightmap au fragment |
-| `src/main/resources/present.wgsl` | tonemap plein écran (l'équivalent de leur tonemapper) |
-| `src/main/resources/hud.wgsl` | passe HUD : quads texturés alpha-blendés |
-| `src/main/kotlin/org/graphiks/hellodawn4k/CornellBox.kt` | la scène : quads, matériaux, boîtes tournées |
-| `src/main/kotlin/org/graphiks/hellodawn4k/Camera.kt` | base de caméra partagée + contrôles orbitaux |
-| `src/main/kotlin/org/graphiks/hellodawn4k/Mat4.kt` | perspectives/lookAt colonne-majeur pour le rasterizer |
-| `src/main/kotlin/org/graphiks/hellodawn4k/WindowMain.kt` | fenêtre GLFW, session, les trois passes GPU |
-| `src/main/kotlin/org/graphiks/hellodawn4k/Hud.kt` | HUD : layout Kalligraphie + atlas de glyphes GPU |
-| `src/main/kotlin/org/graphiks/hellodawn4k/Png.kt` | encodeur PNG minimal (sans dépendance) |
-| `src/main/kotlin/org/graphiks/hellodawn4k/NoiseMetric.kt` | comparaison de bruit local entre dumps |
+| `src/commonMain/kotlin/…/Shaders.kt` | sources WGSL en constantes Kotlin (les frameworks natifs n'embarquent pas les ressources communes) |
+| `src/commonMain/kotlin/…/CornellRenderer.kt` | radiosity + rasterizer + raytracer + tonemap, partagé par tous les hôtes |
+| `src/commonMain/kotlin/…/CornellBox.kt`, `Camera.kt`, `Mat4.kt` | scène, caméra orbitale, perspectives/lookAt |
+| `src/jvmMain/kotlin/…/WindowMain.kt` | hôte desktop GLFW (+ dump de fumée dans `Dump.kt`) |
+| `src/jvmMain/kotlin/…/Hud.kt` | HUD desktop : layout Kalligraphie + atlas de glyphes GPU |
+| `src/iosMain/kotlin/…/CornellViewController.kt` | hôte UIKit (DawnMetalView, toucher) |
+| `androidApp/src/main/kotlin/…/CornellActivity.kt` | hôte Android (DawnSurfaceView, toucher) |
+| `iosApp/project.yml` + `CornellApp/AppDelegate.swift` | app iOS générée par XcodeGen |
+| `src/jvmMain/kotlin/…/Png.kt`, `NoiseMetric.kt` | encodeur PNG et métrique de bruit (desktop) |
 
 ## Dépendances
 

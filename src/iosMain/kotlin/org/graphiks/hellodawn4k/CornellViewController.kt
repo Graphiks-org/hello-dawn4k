@@ -21,7 +21,6 @@ import platform.UIKit.UILabel
 import platform.UIKit.UITouch
 import platform.UIKit.UIViewController
 import platform.UIKit.addSubview
-import platform.UIKit.whiteColor
 
 /**
  * iOS host over the shared Cornell renderer: UIKit owns the DawnMetalView (Metal-backed),
@@ -35,7 +34,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     private var cameraDirty = true
     private var rendering: kotlinx.coroutines.Job? = null
     private var cleanup: kotlinx.coroutines.Job? = null
-    private var lastDownAt = 0L
+    private var lastDownAt = 0.0
     private var lastPointer: Pair<Double, Double>? = null
     private lateinit var metal: DawnMetalView
     private lateinit var status: UILabel
@@ -46,7 +45,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         status = UILabel(CGRectMake(24.0, 50.0, 1100.0, 80.0)).apply {
             text = "Démarrage…"
             numberOfLines = 0
-            textColor = whiteColor
+            textColor = UIColor.whiteColor
         }
         metal.addSubview(status)
     }
@@ -58,7 +57,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         )
     }
 
-    override fun touchesBegan(touches: Set<*>, withEvent: UITouch?) {
+    override fun touchesBegan(touches: Set<*>, withEvent: UIEvent?) {
         super.touchesBegan(touches, withEvent)
         val touch = touches.firstOrNull() as? UITouch ?: return
         val location = touch.locationInView(metal).useContents { x to y }
@@ -70,11 +69,11 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         lastPointer = location
     }
 
-    override fun touchesMoved(touches: Set<*>, withEvent: UITouch?) {
+    override fun touchesMoved(touches: Set<*>, withEvent: UIEvent?) {
         super.touchesMoved(touches, withEvent)
         val touch = touches.firstOrNull() as? UITouch ?: return
         val all = withEvent?.allTouches
-        if (all != null && all.count > 1) return // pinch: leave zoom for a later pass
+        if (all != null && all.count() > 1) return // pinch: leave zoom for a later pass
         val location = touch.locationInView(metal).useContents { x to y }
         val previous = lastPointer
         lastPointer = location
@@ -84,7 +83,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         }
     }
 
-    override fun touchesEnded(touches: Set<*>, withEvent: UITouch?) {
+    override fun touchesEnded(touches: Set<*>, withEvent: UIEvent?) {
         super.touchesEnded(touches, withEvent)
         lastPointer = null
     }
@@ -129,10 +128,5 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             metal.awaitRetirement()
         }
         super.viewDidDisappear(animated)
-    }
-
-    override fun dealloc() {
-        scope.cancel()
-        super.dealloc()
     }
 }
