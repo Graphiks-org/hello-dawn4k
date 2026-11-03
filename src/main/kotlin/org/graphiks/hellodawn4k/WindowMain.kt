@@ -63,6 +63,7 @@ const val WINDOW_SAMPLES_PER_FRAME = 8
 
 // GLFW constants forwarded as-is by the toolkit's window events.
 private const val GLFW_RELEASE = 0
+private const val GLFW_PRESS = 1
 private const val GLFW_BUTTON_LEFT = 0
 private const val GLFW_KEY_R = 82
 private const val GLFW_KEY_M = 77
@@ -137,7 +138,7 @@ private class OrbitControls(private val window: DawnWindow, val camera: OrbitCam
                     camera.zoom(event.y)
                     cameraDirty = true
                 }
-                is DawnWindowEvent.Key -> when (event.key) {
+                is DawnWindowEvent.Key -> if (event.action == GLFW_PRESS) when (event.key) {
                     GLFW_KEY_R -> {
                         camera.reset()
                         cameraDirty = true
