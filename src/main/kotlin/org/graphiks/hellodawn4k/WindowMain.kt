@@ -58,8 +58,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.seconds
 
-/** Samples traced per presented frame; the on-screen image converges as frames accumulate. */
-const val WINDOW_SAMPLES_PER_FRAME = 8
+/** Samples traced per radiosity workgroup, matching the webgpu-samples. */
+
+/** Internal dump resolution; the live render follows the window's physical extent. */
+const val WIDTH = 640
+const val HEIGHT = 480
+const val WORKGROUP_SIZE = 8
 
 // GLFW constants forwarded as-is by the toolkit's window events.
 private const val GLFW_RELEASE = 0
@@ -69,8 +73,8 @@ private const val GLFW_KEY_R = 82
 private const val GLFW_KEY_M = 77
 private const val GLFW_KEY_ESCAPE = 256
 
-/** Rendering modes; M cycles through them. The two lightmap views follow the webgpu-samples. */
-enum class RenderMode { PATH_TRACING, RASTERIZER, RAYTRACER }
+/** Rendering modes over the shared photon lightmap, mirroring the webgpu-samples renderers. */
+enum class RenderMode { RASTERIZER, RAYTRACER }
 
 /**
  * Windowed Cornell box with three renderers, mirroring the webgpu-samples architecture:
@@ -82,9 +86,8 @@ enum class RenderMode { PATH_TRACING, RASTERIZER, RAYTRACER }
 fun main() = runBlocking {
     val frameLimit = System.getProperty("cornell.frames")?.toIntOrNull() ?: 0
     val initialMode = when (System.getProperty("cornell.mode")) {
-        "lightmap", "rasterizer" -> RenderMode.RASTERIZER
         "raytracer", "ray" -> RenderMode.RAYTRACER
-        else -> RenderMode.PATH_TRACING
+        else -> RenderMode.RASTERIZER
     }
     val camera = OrbitCamera()
     // Smoke-test hook: render the finite run from an explicit orbit position.
@@ -159,7 +162,7 @@ private suspend fun renderCornellFrames(
     presentation: DawnPresentation,
     frameLimit: Int,
     controls: OrbitControls,
-    initialMode: RenderMode = RenderMode.PATH_TRACING,
+    initialMode: RenderMode = RenderMode.RASTERIZER,
 ) {
     require(frameLimit >= 0)
     val renderer = CornellWindowRenderer(gpu, checkNotNull(presentation.configuration.value).format)
@@ -167,21 +170,14 @@ private suspend fun renderCornellFrames(
     val hudRenderer = hudText?.let { HudRenderer(gpu, it) }
     val adapterName = gpu.adapter.info.description
     var presented = 0u
-    var accumulated = 0u
     var mode = initialMode
     var hudVertices = FloatArray(0)
     var emaFrameMs = 16.0
     var lastHudAt = System.nanoTime()
 
-    fun hudLines(samples: Int): List<String> = listOf(
-        when (mode) {
-            RenderMode.PATH_TRACING ->
-                "${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${renderer.renderExtent.first}x${renderer.renderExtent.second}"
-            RenderMode.RASTERIZER ->
-                "${(1000.0 / emaFrameMs).toInt()} fps · ${(renderer.photonsEmitted / 1_000_000.0).toInt()}M photons · rasterizer"
-            RenderMode.RAYTRACER ->
-                "${(1000.0 / emaFrameMs).toInt()} fps · ${(renderer.photonsEmitted / 1_000_000.0).toInt()}M photons · raytracer"
-        },
+    fun hudLines(): List<String> = listOf(
+        "${(1000.0 / emaFrameMs).toInt()} fps · ${(renderer.photonsEmitted / 1_000_000.0).toInt()}M photons · " +
+            if (mode == RenderMode.RASTERIZER) "rasterizer" else "raytracer",
         "az %.0f°  el %.0f°  zoom %.1f".format(
             Math.toDegrees(controls.camera.azimuth.toDouble()),
             Math.toDegrees(controls.camera.elevation.toDouble()),
@@ -197,39 +193,26 @@ private suspend fun renderCornellFrames(
         ) {
             if (controls.toggleMode) {
                 controls.toggleMode = false
-                mode = when (mode) {
-                    RenderMode.PATH_TRACING -> RenderMode.RASTERIZER
-                    RenderMode.RASTERIZER -> RenderMode.RAYTRACER
-                    RenderMode.RAYTRACER -> RenderMode.PATH_TRACING
-                }
-                if (mode == RenderMode.PATH_TRACING) accumulated = 0u
+                mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
                 lastHudAt = 0L // force a HUD refresh with the new mode
             }
             if (controls.cameraDirty) {
                 controls.cameraDirty = false
                 renderer.updateCamera(controls.camera.basis())
-                // Restart the mean from scratch: blending HDR history across viewpoints
-                // smears the light source into psychedelic trails through the tonemap.
-                accumulated = 0u
             }
             val frameStartedAt = System.nanoTime()
             if (presentation.withFrame { frame ->
-                    renderer.renderFrame(frame, accumulated + 1u, mode, controls.camera, hudRenderer, hudVertices)
+                    renderer.renderFrame(frame, mode, controls.camera, hudRenderer, hudVertices)
                     frame.present()
                 }) {
                 presented++
-                accumulated++
-            }
-            if (renderer.consumeResize()) {
-                accumulated = 0u // the radiance buffer was reallocated at the new extent
             }
             val frameMs = (System.nanoTime() - frameStartedAt) / 1_000_000.0
             emaFrameMs = emaFrameMs * 0.9 + frameMs * 0.1
             if (hudRenderer != null && System.nanoTime() - lastHudAt > 500_000_000L) {
                 lastHudAt = System.nanoTime()
-                val samples = ((accumulated + 1u) * WINDOW_SAMPLES_PER_FRAME.toUInt()).toInt()
                 hudVertices = hudRenderer.buildVertices(
-                    hudLines(samples).map { hudText!!.layoutLine(it) },
+                    hudLines().map { hudText!!.layoutLine(it) },
                     baseX = 12f,
                     baseY = 30f,
                     lineHeight = 26f,
@@ -241,9 +224,8 @@ private suspend fun renderCornellFrames(
         if (frameLimit > 0) {
             // Refresh the HUD so the dump reports the final state, not the last 2 Hz update.
             if (hudRenderer != null) {
-                val samples = ((accumulated + 1u) * WINDOW_SAMPLES_PER_FRAME.toUInt()).toInt()
                 hudVertices = hudRenderer.buildVertices(
-                    hudLines(samples).map { hudText!!.layoutLine(it) },
+                    hudLines().map { hudText!!.layoutLine(it) },
                     baseX = 12f,
                     baseY = 30f,
                     lineHeight = 26f,
@@ -303,19 +285,6 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
     /** The sample's concatenation pattern: every pass shader is common.wgsl + its own file. */
     private fun shader(name: String): String =
         resource("/common.wgsl") + "\n" + resource(name)
-
-    // --- Path tracer (ours) ---
-    private val traceShader = session.device.createShaderModule(ShaderModuleDescriptor(shader("/cornell.wgsl")))
-    private val tracePipeline = session.device.createComputePipeline(
-        ComputePipelineDescriptor(ProgrammableStage(traceShader, "main")),
-    )
-    private val traceLayout = tracePipeline.getBindGroupLayout(0u)
-    private var traceBinding = session.device.createBindGroup(
-        BindGroupDescriptor(
-            traceLayout,
-            listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, radiance), BindGroupEntry(2u, params), BindGroupEntry(3u, cameraBuffer)),
-        ),
-    )
 
     // --- Radiosity (the sample's Radiosity): photons -> atomic u32 -> 256x256 lightmap ---
     private val lightmapSize = 256u
@@ -465,7 +434,7 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
 
     private var resizePending = false
 
-    /** True once after the render target switched size; the caller restarts accumulation. */
+    /** True once after the render target switched size (the radiance buffer was reallocated). */
     fun consumeResize(): Boolean {
         val pending = resizePending
         resizePending = false
@@ -473,10 +442,9 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
     }
 
     /**
-     * The ray-traced modes render at the window's physical extent, like the rasterizer:
-     * primary-visibility edges get native pixel density instead of a nearest-neighbor
-     * stretch of a fixed internal image. Swaps the radiance buffer and rebuilds the
-     * bind groups that reference it; the path accumulation restarts on resize.
+     * The ray-traced view renders at the window's physical extent, like the rasterizer:
+     * primary-visibility edges get native pixel density. Swaps the radiance buffer and
+     * rebuilds the bind groups that reference it.
      */
     private fun ensureRenderSize(width: Int, height: Int) {
         if (width <= 0 || height <= 0 || (width == renderWidth && height == renderHeight)) return
@@ -486,13 +454,6 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
             BufferDescriptor((width * height * 16).toULong(), GPUBufferUsage.Storage),
         )
         session.queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(width.toUInt(), height.toUInt(), 0u, 0u)))
-        traceBinding.close()
-        traceBinding = session.device.createBindGroup(
-            BindGroupDescriptor(
-                traceLayout,
-                listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, replacement), BindGroupEntry(2u, params), BindGroupEntry(3u, cameraBuffer)),
-            ),
-        )
         raytracerBinding.close()
         raytracerBinding = session.device.createBindGroup(
             BindGroupDescriptor(
@@ -519,7 +480,6 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
     /** One radiosity step plus the selected view pass (plus the HUD), in a single command buffer. */
     fun renderFrame(
         frame: DawnFrame,
-        frameIndex: UInt,
         mode: RenderMode,
         orbit: OrbitCamera,
         hud: HudRenderer?,
@@ -530,9 +490,9 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
             scene.quadCount.toUInt(),
             renderWidth.toUInt(),
             renderHeight.toUInt(),
-            if (mode == RenderMode.PATH_TRACING) WINDOW_SAMPLES_PER_FRAME.toUInt() else 1u,
+            1u,
             scene.lightIndex.toUInt(), 0u, 0u, 0u,
-            frameIndex, 0u, 0u, 0u,
+            1u, 0u, 0u, 0u,
         )))
         val workgroupsX = ((renderWidth + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
         val workgroupsY = ((renderHeight + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
@@ -540,18 +500,10 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
             encoder.beginComputePass().use { pass ->
                 try {
                     runRadiosity(pass)
-                    when (mode) {
-                        RenderMode.PATH_TRACING -> {
-                            pass.setPipeline(tracePipeline)
-                            pass.setBindGroup(0u, traceBinding)
-                            pass.dispatchWorkgroups(workgroupsX, workgroupsY)
-                        }
-                        RenderMode.RASTERIZER -> {} // rendered by the graphics pass below
-                        RenderMode.RAYTRACER -> {
-                            pass.setPipeline(raytracerPipeline)
-                            pass.setBindGroup(0u, raytracerBinding)
-                            pass.dispatchWorkgroups(workgroupsX, workgroupsY)
-                        }
+                    if (mode == RenderMode.RAYTRACER) {
+                        pass.setPipeline(raytracerPipeline)
+                        pass.setBindGroup(0u, raytracerBinding)
+                        pass.dispatchWorkgroups(workgroupsX, workgroupsY)
                     }
                 } finally {
                     pass.end()
@@ -963,13 +915,11 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
     override fun close() {
         if (closed) return
         closed = true
-        traceBinding.close()
         radiosityBinding.close()
         publishBinding.close()
         raytracerBinding.close()
         rasterBinding.close()
         presentBinding.close()
-        traceLayout.close()
         radiosityLayout.close()
         publishLayout.close()
         raytracerLayout.close()
@@ -979,12 +929,10 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         raytracerPipeline.close()
         publishPipeline.close()
         radiosityPipeline.close()
-        tracePipeline.close()
         presentPipeline.close()
         rasterShader.close()
         raytracerShader.close()
         radiosityShader.close()
-        traceShader.close()
         presentShader.close()
         indexBuffer.close()
         vertexBuffer.close()
