@@ -40,6 +40,7 @@ class CornellActivity : Activity() {
     private var cleanup: Job? = null
     private var lastDownAt = 0L
     private var lastPointer: Pair<Float, Float>? = null
+    private var lastPinchDistance: Float? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,6 +62,20 @@ class CornellActivity : Activity() {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.pointerCount >= 2) {
+            // Pinch zoom: the ratio of successive finger distances scales the radius.
+            lastPointer = null
+            val dx = event.getX(0) - event.getX(1)
+            val dy = event.getY(0) - event.getY(1)
+            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+            val previous = lastPinchDistance
+            lastPinchDistance = distance
+            if (previous != null && previous > 1f) {
+                camera.zoomRatio((distance / previous).toDouble())
+                cameraDirty = true
+            }
+            return true
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val now = event.downTime
@@ -78,7 +93,10 @@ class CornellActivity : Activity() {
                     cameraDirty = true
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lastPointer = null
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                lastPointer = null
+                lastPinchDistance = null
+            }
         }
         return super.onTouchEvent(event)
     }

@@ -49,6 +49,11 @@ class OrbitCamera(
         radius = (radius * (1.0 - 0.1 * delta)).toFloat().coerceIn(1.6f, 8.0f)
     }
 
+    /** Pinch zoom: ratio > 1 (fingers apart) moves closer. */
+    fun zoomRatio(ratio: Double) {
+        radius = (radius / ratio).toFloat().coerceIn(1.6f, 8.0f)
+    }
+
     fun reset() {
         azimuth = 0f
         elevation = 0.10f

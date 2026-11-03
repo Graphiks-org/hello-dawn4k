@@ -36,6 +36,17 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     private var cleanup: kotlinx.coroutines.Job? = null
     private var lastDownAt = 0.0
     private var lastPointer: Pair<Double, Double>? = null
+    private var lastPinchDistance: Double? = null
+
+    private fun pinchDistance(touches: Set<*>): Double? {
+        val first = touches.elementAtOrNull(0) as? UITouch ?: return null
+        val second = touches.elementAtOrNull(1) as? UITouch ?: return null
+        val a = first.locationInView(metal).useContents { x to y }
+        val b = second.locationInView(metal).useContents { x to y }
+        val dx = a.first - b.first
+        val dy = a.second - b.second
+        return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
     private lateinit var metal: DawnMetalView
     private lateinit var status: UILabel
 
@@ -60,6 +71,12 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     override fun touchesBegan(touches: Set<*>, withEvent: UIEvent?) {
         super.touchesBegan(touches, withEvent)
         val touch = touches.firstOrNull() as? UITouch ?: return
+        if ((withEvent?.allTouches()?.count() ?: 0) >= 2) {
+            // Second finger down: pinch starts, drag pauses.
+            lastPointer = null
+            lastPinchDistance = withEvent?.allTouches()?.let { pinchDistance(it) }
+            return
+        }
         val location = touch.locationInView(metal).useContents { x to y }
         val now = touch.timestamp
         if (now - lastDownAt < 0.3) {
@@ -71,9 +88,19 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
 
     override fun touchesMoved(touches: Set<*>, withEvent: UIEvent?) {
         super.touchesMoved(touches, withEvent)
+        val all = withEvent?.allTouches()
+        if (all != null && all.count() >= 2) {
+            // Pinch zoom: the ratio of successive finger distances scales the radius.
+            val distance = pinchDistance(all) ?: return
+            val previous = lastPinchDistance
+            lastPinchDistance = distance
+            if (previous != null && previous > 1.0) {
+                camera.zoomRatio(distance / previous)
+                cameraDirty = true
+            }
+            return
+        }
         val touch = touches.firstOrNull() as? UITouch ?: return
-        val all = withEvent?.allTouches
-        if (all != null && all.count() > 1) return // pinch: leave zoom for a later pass
         val location = touch.locationInView(metal).useContents { x to y }
         val previous = lastPointer
         lastPointer = location
@@ -86,6 +113,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     override fun touchesEnded(touches: Set<*>, withEvent: UIEvent?) {
         super.touchesEnded(touches, withEvent)
         lastPointer = null
+        lastPinchDistance = null
     }
 
     override fun viewDidAppear(animated: Boolean) {
