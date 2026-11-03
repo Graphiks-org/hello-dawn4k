@@ -549,8 +549,11 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         val extentWidth = frame.extent.width
         val extentHeight = frame.extent.height
         val basis = orbit.basis()
+        // The sample's 45-degree fov is NOT ours: the orbit camera frames the box at
+        // 2*atan(0.30); using it here made M look like it moved the camera.
+        val fovY = 2f * kotlin.math.atan(orbit.tanHalfFov)
         val mvp = Mat4.multiply(
-            Mat4.perspective((2.0 * Math.PI / 8.0).toFloat(), extentWidth.toFloat() / extentHeight, 0.5f, 100f),
+            Mat4.perspective(fovY, extentWidth.toFloat() / extentHeight, 0.5f, 100f),
             Mat4.lookAt(basis.position, orbit.target, V3(0f, 1f, 0f)),
         )
         session.queue.writeBuffer(rasterUniforms, 0uL, ArrayBuffer.of(mvp))
@@ -786,8 +789,9 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
                 }
             }
             val basis = orbit.basis()
+            val fovY = 2f * kotlin.math.atan(orbit.tanHalfFov)
             val mvp = Mat4.multiply(
-                Mat4.perspective((2.0 * Math.PI / 8.0).toFloat(), WIDTH.toFloat() / HEIGHT, 0.5f, 100f),
+                Mat4.perspective(fovY, WIDTH.toFloat() / HEIGHT, 0.5f, 100f),
                 Mat4.lookAt(basis.position, orbit.target, V3(0f, 1f, 0f)),
             )
             session.queue.writeBuffer(rasterUniforms, 0uL, ArrayBuffer.of(mvp))
