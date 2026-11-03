@@ -176,7 +176,7 @@ private suspend fun renderCornellFrames(
     fun hudLines(samples: Int): List<String> = listOf(
         when (mode) {
             RenderMode.PATH_TRACING ->
-                "${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${WIDTH}x$HEIGHT"
+                "${(1000.0 / emaFrameMs).toInt()} fps · $samples spp · ${renderer.renderExtent.first}x${renderer.renderExtent.second}"
             RenderMode.RASTERIZER ->
                 "${(1000.0 / emaFrameMs).toInt()} fps · ${(renderer.photonsEmitted / 1_000_000.0).toInt()}M photons · rasterizer"
             RenderMode.RAYTRACER ->
@@ -219,6 +219,9 @@ private suspend fun renderCornellFrames(
                 }) {
                 presented++
                 accumulated++
+            }
+            if (renderer.consumeResize()) {
+                accumulated = 0u // the radiance buffer was reallocated at the new extent
             }
             val frameMs = (System.nanoTime() - frameStartedAt) / 1_000_000.0
             emaFrameMs = emaFrameMs * 0.9 + frameMs * 0.1
@@ -271,17 +274,19 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
     private var closed = false
     private val scene = CornellBox.scene()
     private val quadBytes = (scene.quadData.size * 4).toULong()
-    private val radianceBytes = (WIDTH * HEIGHT * 16).toULong()
 
-    // --- Shared scene buffers (the sample's Common) ---
+    // --- Shared scene buffers (the sample's Common); radiance resizes to the window ---
     private val quads = session.device.createBuffer(
         BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst),
     )
     private val params = session.device.createBuffer(
         BufferDescriptor(48uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    private val radiance = session.device.createBuffer(
-        BufferDescriptor(radianceBytes, GPUBufferUsage.Storage),
+    private var renderWidth = WIDTH
+    private var renderHeight = HEIGHT
+    val renderExtent: Pair<Int, Int> get() = renderWidth to renderHeight
+    private var radiance = session.device.createBuffer(
+        BufferDescriptor((WIDTH * HEIGHT * 16).toULong(), GPUBufferUsage.Storage),
     )
     private val dims = session.device.createBuffer(
         BufferDescriptor(16uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
@@ -305,7 +310,7 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         ComputePipelineDescriptor(ProgrammableStage(traceShader, "main")),
     )
     private val traceLayout = tracePipeline.getBindGroupLayout(0u)
-    private val traceBinding = session.device.createBindGroup(
+    private var traceBinding = session.device.createBindGroup(
         BindGroupDescriptor(
             traceLayout,
             listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, radiance), BindGroupEntry(2u, params), BindGroupEntry(3u, cameraBuffer)),
@@ -377,7 +382,7 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         ComputePipelineDescriptor(ProgrammableStage(raytracerShader, "main")),
     )
     private val raytracerLayout = raytracerPipeline.getBindGroupLayout(0u)
-    private val raytracerBinding = session.device.createBindGroup(
+    private var raytracerBinding = session.device.createBindGroup(
         BindGroupDescriptor(
             raytracerLayout,
             listOf(
@@ -458,6 +463,59 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         session.queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
     }
 
+    private var resizePending = false
+
+    /** True once after the render target switched size; the caller restarts accumulation. */
+    fun consumeResize(): Boolean {
+        val pending = resizePending
+        resizePending = false
+        return pending
+    }
+
+    /**
+     * The ray-traced modes render at the window's physical extent, like the rasterizer:
+     * primary-visibility edges get native pixel density instead of a nearest-neighbor
+     * stretch of a fixed internal image. Swaps the radiance buffer and rebuilds the
+     * bind groups that reference it; the path accumulation restarts on resize.
+     */
+    private fun ensureRenderSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0 || (width == renderWidth && height == renderHeight)) return
+        renderWidth = width
+        renderHeight = height
+        val replacement = session.device.createBuffer(
+            BufferDescriptor((width * height * 16).toULong(), GPUBufferUsage.Storage),
+        )
+        session.queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(width.toUInt(), height.toUInt(), 0u, 0u)))
+        traceBinding.close()
+        traceBinding = session.device.createBindGroup(
+            BindGroupDescriptor(
+                traceLayout,
+                listOf(BindGroupEntry(0u, quads), BindGroupEntry(1u, replacement), BindGroupEntry(2u, params), BindGroupEntry(3u, cameraBuffer)),
+            ),
+        )
+        raytracerBinding.close()
+        raytracerBinding = session.device.createBindGroup(
+            BindGroupDescriptor(
+                raytracerLayout,
+                listOf(
+                    BindGroupEntry(0u, quads),
+                    BindGroupEntry(1u, replacement),
+                    BindGroupEntry(2u, params),
+                    BindGroupEntry(3u, cameraBuffer),
+                    BindGroupEntry(4u, lightmapView),
+                    BindGroupEntry(5u, lightmapSampler),
+                ),
+            ),
+        )
+        presentBinding.close()
+        presentBinding = session.device.createBindGroup(
+            BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, replacement), BindGroupEntry(1u, dims))),
+        )
+        radiance.close()
+        radiance = replacement
+        resizePending = true
+    }
+
     /** One radiosity step plus the selected view pass (plus the HUD), in a single command buffer. */
     fun renderFrame(
         frame: DawnFrame,
@@ -466,14 +524,18 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         orbit: OrbitCamera,
         hud: HudRenderer?,
         hudVertices: FloatArray,
-    ) {        session.queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
+    ) {
+        ensureRenderSize(frame.extent.width, frame.extent.height)
+        session.queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
             scene.quadCount.toUInt(),
-            WIDTH.toUInt(),
-            HEIGHT.toUInt(),
+            renderWidth.toUInt(),
+            renderHeight.toUInt(),
             if (mode == RenderMode.PATH_TRACING) WINDOW_SAMPLES_PER_FRAME.toUInt() else 1u,
             scene.lightIndex.toUInt(), 0u, 0u, 0u,
             frameIndex, 0u, 0u, 0u,
         )))
+        val workgroupsX = ((renderWidth + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
+        val workgroupsY = ((renderHeight + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
         (session.device.createCommandEncoder() as DawnCommandEncoder).use { encoder ->
             encoder.beginComputePass().use { pass ->
                 try {
@@ -482,19 +544,13 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
                         RenderMode.PATH_TRACING -> {
                             pass.setPipeline(tracePipeline)
                             pass.setBindGroup(0u, traceBinding)
-                            pass.dispatchWorkgroups(
-                                ((WIDTH + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
-                                ((HEIGHT + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
-                            )
+                            pass.dispatchWorkgroups(workgroupsX, workgroupsY)
                         }
                         RenderMode.RASTERIZER -> {} // rendered by the graphics pass below
                         RenderMode.RAYTRACER -> {
                             pass.setPipeline(raytracerPipeline)
                             pass.setBindGroup(0u, raytracerBinding)
-                            pass.dispatchWorkgroups(
-                                ((WIDTH + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
-                                ((HEIGHT + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt(),
-                            )
+                            pass.dispatchWorkgroups(workgroupsX, workgroupsY)
                         }
                     }
                 } finally {
@@ -633,7 +689,7 @@ private class CornellWindowRenderer(private val session: DawnSession, private va
         ),
     )
     private val presentLayout = presentPipeline.getBindGroupLayout(0u)
-    private val presentBinding = session.device.createBindGroup(
+    private var presentBinding = session.device.createBindGroup(
         BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
     )
 
