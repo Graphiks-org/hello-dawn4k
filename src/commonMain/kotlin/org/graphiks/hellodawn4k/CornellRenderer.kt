@@ -95,9 +95,6 @@ class CornellRenderer(
     // --- Radiosity (the sample's Radiosity): photons -> atomic u32 -> 256x256 lightmap ---
     private val lightmapSize = 256u
     private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
-
-    // rgba16float matches the webgpu-samples original; Chromium, Safari and Dawn support it.
-    // Firefox may refuse it — if so, the uncaptured-error fallback in the web host will surface.
     private val radiosityCode: String = Shaders.COMMON_WGSL + "\n" + Shaders.RADIOSITY_WGSL
 
     private val photonAccumulation = device.createBuffer(
@@ -122,16 +119,64 @@ class CornellRenderer(
         BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
     private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(radiosityCode))
+
+    // Explicit bind group layouts (the sample's pattern): Firefox's auto layout may
+    // include unused bindings declared in the common module, causing a mismatch with
+    // the bind group and an invalid pipeline. Explicit layouts pin the interface.
+    private val radiosityBindGroupLayout = device.createBindGroupLayout(
+        org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor(listOf(
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                0u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.ReadOnlyStorage,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                2u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                4u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Storage,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                5u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                storageTexture = org.graphiks.webgpu.descriptors.StorageTextureBindingLayout(
+                    format = GPUTextureFormat.RGBA16Float,
+                    access = org.graphiks.webgpu.GPUStorageTextureAccess.WriteOnly,
+                    viewDimension = org.graphiks.webgpu.GPUTextureViewDimension.TwoDArray,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                6u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+                ),
+            ),
+        )),
+    )
+    private val radiosityPipelineLayout = device.createPipelineLayout(
+        org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor(listOf(radiosityBindGroupLayout)),
+    )
     private val radiosityPipeline = device.createComputePipeline(
-        ComputePipelineDescriptor(ProgrammableStage(radiosityShader, "radiosity")),
+        org.graphiks.webgpu.descriptors.ComputePipelineDescriptor(
+            layout = radiosityPipelineLayout,
+            compute = ProgrammableStage(radiosityShader, "radiosity"),
+        ),
     )
     private val publishPipeline = device.createComputePipeline(
-        ComputePipelineDescriptor(ProgrammableStage(radiosityShader, "publishLightmap")),
+        org.graphiks.webgpu.descriptors.ComputePipelineDescriptor(
+            layout = radiosityPipelineLayout,
+            compute = ProgrammableStage(radiosityShader, "publishLightmap"),
+        ),
     )
-    private val radiosityLayout = radiosityPipeline.getBindGroupLayout(0u)
     private val radiosityBinding = device.createBindGroup(
         BindGroupDescriptor(
-            radiosityLayout,
+            radiosityBindGroupLayout,
             listOf(
                 BindGroupEntry(0u, quads),
                 BindGroupEntry(2u, params),
@@ -141,11 +186,12 @@ class CornellRenderer(
             ),
         ),
     )
-    private val publishLayout = publishPipeline.getBindGroupLayout(0u)
     private val publishBinding = device.createBindGroup(
         BindGroupDescriptor(
-            publishLayout,
+            radiosityBindGroupLayout,
             listOf(
+                BindGroupEntry(0u, quads),
+                BindGroupEntry(2u, params),
                 BindGroupEntry(4u, photonAccumulation),
                 BindGroupEntry(5u, lightmapView),
                 BindGroupEntry(6u, photonParams),
@@ -158,13 +204,56 @@ class CornellRenderer(
 
     // --- Ray-traced lightmap view (the sample's Raytracer) ---
     private val raytracerShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RAYTRACER_WGSL)))
-    private val raytracerPipeline = device.createComputePipeline(
-        ComputePipelineDescriptor(ProgrammableStage(raytracerShader, "main")),
+    private val raytracerBindGroupLayout = device.createBindGroupLayout(
+        org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor(listOf(
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                0u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.ReadOnlyStorage,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                1u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Storage,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                2u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                3u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                4u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                texture = org.graphiks.webgpu.descriptors.TextureBindingLayout(
+                    viewDimension = org.graphiks.webgpu.GPUTextureViewDimension.TwoDArray,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                5u, org.graphiks.webgpu.GPUShaderStage.Compute,
+                sampler = org.graphiks.webgpu.descriptors.SamplerBindingLayout(),
+            ),
+        )),
     )
-    private val raytracerLayout = raytracerPipeline.getBindGroupLayout(0u)
+    private val raytracerPipelineLayout = device.createPipelineLayout(
+        org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor(listOf(raytracerBindGroupLayout)),
+    )
+    private val raytracerPipeline = device.createComputePipeline(
+        org.graphiks.webgpu.descriptors.ComputePipelineDescriptor(
+            layout = raytracerPipelineLayout,
+            compute = ProgrammableStage(raytracerShader, "main"),
+        ),
+    )
     private var raytracerBinding = device.createBindGroup(
         BindGroupDescriptor(
-            raytracerLayout,
+            raytracerBindGroupLayout,
             listOf(
                 BindGroupEntry(0u, quads),
                 BindGroupEntry(1u, radiance),
@@ -237,8 +326,28 @@ class CornellRenderer(
     internal val presentShader = device.createShaderModule(
         ShaderModuleDescriptor(Shaders.PRESENT_WGSL),
     )
+    private val presentBindGroupLayout = device.createBindGroupLayout(
+        org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor(listOf(
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                0u, org.graphiks.webgpu.GPUShaderStage.Fragment,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.ReadOnlyStorage,
+                ),
+            ),
+            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
+                1u, org.graphiks.webgpu.GPUShaderStage.Fragment,
+                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
+                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+                ),
+            ),
+        )),
+    )
+    private val presentPipelineLayout = device.createPipelineLayout(
+        org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor(listOf(presentBindGroupLayout)),
+    )
     internal val presentPipeline = device.createRenderPipeline(
         RenderPipelineDescriptor(
+            layout = presentPipelineLayout,
             vertex = VertexState(module = presentShader, entryPoint = "vs"),
             fragment = FragmentState(
                 module = presentShader,
@@ -247,9 +356,8 @@ class CornellRenderer(
             ),
         ),
     )
-    private val presentLayout = presentPipeline.getBindGroupLayout(0u)
     private var presentBinding = device.createBindGroup(
-        BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
+        BindGroupDescriptor(presentBindGroupLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
     )
 
     init {
@@ -287,7 +395,7 @@ class CornellRenderer(
         raytracerBinding.close()
         raytracerBinding = device.createBindGroup(
             BindGroupDescriptor(
-                raytracerLayout,
+                raytracerBindGroupLayout,
                 listOf(
                     BindGroupEntry(0u, quads),
                     BindGroupEntry(1u, replacement),
@@ -300,7 +408,7 @@ class CornellRenderer(
         )
         presentBinding.close()
         presentBinding = device.createBindGroup(
-            BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, replacement), BindGroupEntry(1u, dims))),
+            BindGroupDescriptor(presentBindGroupLayout, listOf(BindGroupEntry(0u, replacement), BindGroupEntry(1u, dims))),
         )
         radiance.close()
         radiance = replacement
@@ -515,11 +623,11 @@ class CornellRenderer(
         raytracerBinding.close()
         rasterBinding.close()
         presentBinding.close()
-        radiosityLayout.close()
-        publishLayout.close()
-        raytracerLayout.close()
+        radiosityBindGroupLayout.close()
+        radiosityPipelineLayout.close()
+                raytracerBindGroupLayout.close()
         rasterLayout.close()
-        presentLayout.close()
+        presentBindGroupLayout.close()
         rasterPipeline.close()
         raytracerPipeline.close()
         publishPipeline.close()
