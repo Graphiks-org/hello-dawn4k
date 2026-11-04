@@ -96,6 +96,8 @@ fun main() {
                 domCanvas.width = width
                 domCanvas.height = height
             }
+            // The raytracer reads the camera uniform; the web host must keep it fresh.
+            renderer.updateCamera(camera.basis())
             val texture = surface.getCurrentTexture()
             val view: GPUTextureView = texture.texture.createView()
             renderer.renderFrame(Frame(view, width, height), mode, camera)

@@ -96,34 +96,9 @@ class CornellRenderer(
     private val lightmapSize = 256u
     private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
 
-    /**
-     * rgba16float write storage is optional in core WebGPU; Chromium/Dawn have it,
-     * Firefox may refuse the pipeline. Try 16f first, fall back to 32f by patching
-     * the storage declaration in the radiosity shader (sampling is format-agnostic).
-     */
-    private val radiosityCode: String
-    private val storageFormat: GPUTextureFormat
-
-    init {
-        var code = Shaders.COMMON_WGSL + "\n" + Shaders.RADIOSITY_WGSL
-        var format = GPUTextureFormat.RGBA16Float
-        val probeShader = device.createShaderModule(ShaderModuleDescriptor(code))
-        val probePipeline = try {
-            device.createComputePipeline(
-                ComputePipelineDescriptor(ProgrammableStage(probeShader, "radiosity")),
-            )
-        } catch (failure: Throwable) {
-            null
-        }
-        if (probePipeline == null) {
-            code = code.replace("rgba16float", "rgba32float")
-            format = GPUTextureFormat.RGBA32Float
-        }
-        probeShader.close()
-        probePipeline?.close()
-        radiosityCode = code
-        storageFormat = format
-    }
+    // rgba16float matches the webgpu-samples original; Chromium, Safari and Dawn support it.
+    // Firefox may refuse it — if so, the uncaptured-error fallback in the web host will surface.
+    private val radiosityCode: String = Shaders.COMMON_WGSL + "\n" + Shaders.RADIOSITY_WGSL
 
     private val photonAccumulation = device.createBuffer(
         BufferDescriptor(
@@ -134,7 +109,7 @@ class CornellRenderer(
     internal val lightmapTexture = device.createTexture(
         TextureDescriptor(
             size = Extent3D(lightmapSize, lightmapSize, scene.quadCount.toUInt()),
-            format = storageFormat,
+            format = GPUTextureFormat.RGBA16Float,
             usage = GPUTextureUsage.StorageBinding or GPUTextureUsage.TextureBinding,
         ),
     )
