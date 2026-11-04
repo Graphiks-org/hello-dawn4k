@@ -18,8 +18,13 @@ rendus commutables la consultent.
 | Plateforme | Commande | Entrées |
 | --- | --- | --- |
 | macOS / Linux / Windows (JVM) | `./gradlew runWindow` | drag = orbite, molette = zoom, `M` = mode, `R` = reset, `Échap` |
-| Android (Vulkan, API 28+) | `./gradlew :androidApp:assembleDebug` puis installer l'APK | 1 doigt = orbite, double tap = mode |
-| iOS / simulateur (Metal) | `cd iosApp && xcodegen generate && xcodebuild -scheme CornellIOS -sdk iphonesimulator build` | 1 doigt = orbite, double tap = mode |
+| Android (Vulkan, API 28+) | `./gradlew :androidApp:assembleDebug` puis installer l'APK | 1 doigt = orbite, pincer = zoom, double tap = mode |
+| iOS / simulateur (Metal) | `cd iosApp && xcodegen generate && xcodebuild -scheme CornellIOS -sdk iphonesimulator build` | 1 doigt = orbite, pincer = zoom, double tap = mode |
+| Web (WebGPU natif du navigateur) | `./gradlew webGen && cd webApp && python3 -m http.server` → http://localhost:8000 | drag = orbite, molette/pincer = zoom, `M` ou bouton = mode, `R` = reset |
+
+La page web est un fichier unique sans dépendance : `webGen` régénère `webApp/generated/`
+(scène + shaders WGSL) **depuis les sources Kotlin** — même source de vérité que les
+cibles natives, l'API WebGPU du navigateur remplaçant Dawn.
 
 Le projet Xcode (`iosApp/CornellBox.xcodeproj`) est généré depuis `project.yml`
 par [XcodeGen](https://github.com/yonaskolb/XcodeGen) et reste ignoré ; son script

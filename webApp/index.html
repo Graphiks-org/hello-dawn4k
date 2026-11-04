@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>hello-dawn4k — Cornell box (WebGPU)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #hud {
+    position: fixed; top: 12px; left: 12px; color: #fff; font: 13px/1.5 ui-monospace, Menlo, monospace;
+    text-shadow: 0 1px 2px rgba(0,0,0,.8); white-space: pre; pointer-events: none;
+  }
+  #mode {
+    position: fixed; top: 12px; right: 12px; color: #fff; background: rgba(0,0,0,.5);
+    border: 1px solid rgba(255,255,255,.3); border-radius: 6px; padding: 6px 10px;
+    font: 13px ui-monospace, Menlo, monospace; cursor: pointer;
+  }
+  #mode:hover { background: rgba(255,255,255,.15); }
+  #fallback { color: #fff; font: 14px ui-monospace, monospace; padding: 24px; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">Démarrage…</div>
+<button id="mode">Mode : rasterizer (M)</button>
+<div id="fallback" hidden>WebGPU n'est pas disponible dans ce navigateur.</div>
+
+<script src="generated/scene.js"></script>
+<script src="generated/shaders.js"></script>
+<script>
+"use strict";
+
+// Same orbit camera as the Kotlin targets.
+const camera = {
+  azimuth: 0.0, elevation: 0.10, radius: 3.1,
+  target: [0.0, 1.25, 0.0], tanHalfFov: 0.30,
+  drag(dx, dy) {
+    this.azimuth = Math.min(1.4, Math.max(-1.4, this.azimuth + dx * 0.005));
+    this.elevation = Math.min(0.87, Math.max(-0.26, this.elevation - dy * 0.005));
+  },
+  zoomRatio(ratio) { this.radius = Math.min(8.0, Math.max(1.6, this.radius / ratio)); },
+  reset() { this.azimuth = 0.0; this.elevation = 0.10; this.radius = 3.1; },
+  basis() {
+    const ce = Math.cos(this.elevation), se = Math.sin(this.elevation);
+    const position = [
+      this.target[0] + this.radius * ce * Math.sin(this.azimuth),
+      this.target[1] + this.radius * se,
+      this.target[2] + this.radius * ce * Math.cos(this.azimuth),
+    ];
+    const forward = normalize(sub(this.target, position));
+    const right = normalize(cross(forward, [0, 1, 0]));
+    const up = cross(right, forward);
+    return { position, right, up, forward };
+  },
+};
+
+let mode = 0; // 0 = rasterizer, 1 = raytracer
+const modeNames = ["rasterizer", "raytracer"];
+
+// --- mat4 helpers, column-major (WGSL mat4x4f layout) ---
+function perspective(fovY, aspect, near, far) {
+  const f = 1 / Math.tan(fovY / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function lookAt(eye, center, up) {
+  const z = normalize(sub(eye, center));
+  const x = normalize(cross(up, z));
+  const y = cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
+          -dot(x, eye), -dot(y, eye), -dot(z, eye), 1];
+}
+function multiply(a, b) {
+  const out = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+    out[c * 4 + r] = s;
+  }
+  return out;
+}
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+async function init() {
+  if (!navigator.gpu) { document.getElementById("fallback").hidden = false; return; }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) { document.getElementById("fallback").hidden = false; return; }
+  const device = await adapter.requestDevice();
+
+  const canvas = document.getElementById("canvas");
+  const context = canvas.getContext("webgpu");
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({ device, format, alphaMode: "opaque" });
+
+  const FLOATS_PER_QUAD = 24;
+  const lightmapSize = 256;
+  const photonTexels = lightmapSize * lightmapSize * QUAD_COUNT;
+
+  // --- buffers ---
+  const quadsBuffer = device.createBuffer({ size: QUADS.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(quadsBuffer, 0, QUADS);
+  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const cameraBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const rasterUniforms = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const photonParams = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const dims = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const accumulation = device.createBuffer({
+    size: photonTexels * 12, usage: GPUBufferUsage.STORAGE,
+  });
+
+  const lightmap = device.createTexture({
+    size: [lightmapSize, lightmapSize, QUAD_COUNT],
+    format: "rgba16float",
+    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+  });
+  const lightmapView = lightmap.createView();
+  const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+
+  // --- mesh (rasterizer): 4 vertices (pos, uv+layer, emissive) + 6 indices per quad ---
+  const vertices = new Float32Array(QUAD_COUNT * 4 * 10);
+  const indices = new Uint16Array(QUAD_COUNT * 6);
+  for (let q = 0; q < QUAD_COUNT; q++) {
+    const o = q * FLOATS_PER_QUAD;
+    const origin = [QUADS[o], QUADS[o + 1], QUADS[o + 2]];
+    const e1 = [QUADS[o + 4], QUADS[o + 5], QUADS[o + 6]];
+    const e2 = [QUADS[o + 8], QUADS[o + 9], QUADS[o + 10]];
+    const emissive = [QUADS[o + 16], QUADS[o + 17], QUADS[o + 18]];
+    const corners = [origin, add(origin, e1), add(add(origin, e1), e2), add(origin, e2)];
+    const uvs = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    for (let c = 0; c < 4; c++) {
+      const v = (q * 4 + c) * 10;
+      vertices[v] = corners[c][0]; vertices[v + 1] = corners[c][1]; vertices[v + 2] = corners[c][2];
+      vertices[v + 3] = 1;
+      vertices[v + 4] = uvs[c][0]; vertices[v + 5] = uvs[c][1]; vertices[v + 6] = q;
+      vertices[v + 7] = emissive[0]; vertices[v + 8] = emissive[1]; vertices[v + 9] = emissive[2];
+    }
+    const b = q * 6, f = q * 4;
+    indices.set([f, f + 1, f + 2, f, f + 2, f + 3], b);
+  }
+  const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(vertexBuffer, 0, vertices);
+  const indexBuffer = device.createBuffer({ size: indices.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(indexBuffer, 0, indices);
+  function add(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
+
+  // --- pipelines (auto layouts, same binding numbers as the Kotlin targets) ---
+  const radiosityModule = device.createShaderModule({ code: COMMON_WGSL + "\n" + RADIOSITY_WGSL });
+  const radiosityPipeline = device.createComputePipeline({ layout: "auto", compute: { module: radiosityModule, entryPoint: "radiosity" } });
+  const publishPipeline = device.createComputePipeline({ layout: "auto", compute: { module: radiosityModule, entryPoint: "publishLightmap" } });
+  const raytracerModule = device.createShaderModule({ code: COMMON_WGSL + "\n" + RAYTRACER_WGSL });
+  const raytracerPipeline = device.createComputePipeline({ layout: "auto", compute: { module: raytracerModule, entryPoint: "main" } });
+  const rasterModule = device.createShaderModule({ code: RASTERIZER_WGSL });
+  const rasterPipeline = device.createRenderPipeline({
+    layout: "auto",
+    vertex: {
+      module: rasterModule, entryPoint: "vs_main",
+      buffers: [{
+        arrayStride: 40,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: "float32x4" },
+          { shaderLocation: 1, offset: 16, format: "float32x3" },
+          { shaderLocation: 2, offset: 28, format: "float32x3" },
+        ],
+      }],
+    },
+    fragment: { module: rasterModule, entryPoint: "fs_main", targets: [{ format }] },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+  });
+  const presentModule = device.createShaderModule({ code: PRESENT_WGSL });
+  const presentPipeline = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: presentModule, entryPoint: "vs" },
+    fragment: { module: presentModule, entryPoint: "fs", targets: [{ format }] },
+  });
+
+  let radiance = null, radianceBindRay = null, radianceBindPresent = null;
+  let depthTexture = null, depthView = null;
+
+  function buildBindGroups(pipeline, entries) {
+    return device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries });
+  }
+  const radiosityBind = buildBindGroups(radiosityPipeline, [
+    { binding: 0, resource: { buffer: quadsBuffer } },
+    { binding: 2, resource: { buffer: params } },
+    { binding: 4, resource: { buffer: accumulation } },
+    { binding: 5, resource: lightmapView },
+    { binding: 6, resource: { buffer: photonParams } },
+  ]);
+  const publishBind = buildBindGroups(publishPipeline, [
+    { binding: 4, resource: { buffer: accumulation } },
+    { binding: 5, resource: lightmapView },
+    { binding: 6, resource: { buffer: photonParams } },
+  ]);
+  const rasterBind = buildBindGroups(rasterPipeline, [
+    { binding: 0, resource: { buffer: rasterUniforms } },
+    { binding: 1, resource: lightmapView },
+    { binding: 2, resource: sampler },
+  ]);
+
+  // --- resize: canvas at device pixels, radiance buffer follows (raytracer mode) ---
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(canvas.clientWidth * ratio));
+    const h = Math.max(1, Math.floor(canvas.clientHeight * ratio));
+    if (canvas.width === w && canvas.height === h && radiance) return;
+    canvas.width = w; canvas.height = h;
+    if (depthTexture) depthTexture.destroy();
+    depthTexture = device.createTexture({ size: [w, h], format: "depth24plus", usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    depthView = depthTexture.createView();
+    if (radiance) radiance.destroy();
+    radiance = device.createBuffer({ size: w * h * 16, usage: GPUBufferUsage.STORAGE });
+    radianceBindRay = buildBindGroups(raytracerPipeline, [
+      { binding: 0, resource: { buffer: quadsBuffer } },
+      { binding: 1, resource: { buffer: radiance } },
+      { binding: 2, resource: { buffer: params } },
+      { binding: 3, resource: { buffer: cameraBuffer } },
+      { binding: 4, resource: lightmapView },
+      { binding: 5, resource: sampler },
+    ]);
+    radianceBindPresent = buildBindGroups(presentPipeline, [
+      { binding: 0, resource: { buffer: radiance } },
+      { binding: 1, resource: { buffer: dims } },
+    ]);
+    device.queue.writeBuffer(dims, 0, new Uint32Array([w, h, 0, 0]));
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // --- input: drag orbit, wheel/pinch zoom, M or button toggles mode ---
+  const hud = document.getElementById("hud");
+  const modeButton = document.getElementById("mode");
+  function toggleMode() {
+    mode = 1 - mode;
+    modeButton.textContent = `Mode : ${modeNames[mode]} (M)`;
+  }
+  modeButton.addEventListener("click", toggleMode);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "m" || e.key === "M") toggleMode();
+    if (e.key === "r" || e.key === "R") camera.reset();
+  });
+
+  let dragging = false, lastX = 0, lastY = 0, pinchDistance = null;
+  canvas.addEventListener("pointerdown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener("pointerup", () => { dragging = false; pinchDistance = null; });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    camera.drag(e.clientX - lastX, e.clientY - lastY);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); camera.zoomRatio(Math.exp(-e.deltaY * 0.001)); }, { passive: false });
+  canvas.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+      dragging = false;
+      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      if (pinchDistance !== null && pinchDistance > 1) camera.zoomRatio(d / pinchDistance);
+      pinchDistance = d;
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  // --- the shared render loop: radiosity always + selected view ---
+  let accumulationMean = 0, photonsEmitted = 0;
+  let emaFrameMs = 16, lastStatus = performance.now();
+
+  function frame() {
+    resize();
+    const w = canvas.width, h = canvas.height;
+    const basis = camera.basis();
+    device.queue.writeBuffer(cameraBuffer, 0, new Float32Array([
+      ...basis.position, 0, ...basis.right, 0, ...basis.up, 0, ...basis.forward, camera.tanHalfFov,
+    ]));
+    device.queue.writeBuffer(params, 0, new Uint32Array([
+      QUAD_COUNT, w, h, 1, LIGHT_INDEX, 0, 0, 0, 1, 0, 0, 0,
+    ]));
+
+    const encoder = device.createCommandEncoder();
+
+    // Radiosity: 1024 workgroups x 256 photons, then publish the progressive mean.
+    const photonsPerFrame = 256 * 1024;
+    accumulationMean += photonsPerFrame * 100000 / photonTexels;
+    const toLightmapScale = 1 / accumulationMean;
+    const bufferScale = accumulationMean > 2 * 0x10000000 ? 0.5 : 1;
+    accumulationMean *= bufferScale;
+    photonsEmitted += photonsPerFrame;
+    const seeds = new Uint32Array(3).map(() => (Math.random() * 4294967296) >>> 0);
+    // PhotonParams layout: f32 scale, f32 scale, u32 quadCount, u32 lightIndex, vec4u seeds.
+    device.queue.writeBuffer(photonParams, 0, new Float32Array([toLightmapScale, bufferScale]));
+    device.queue.writeBuffer(photonParams, 8, new Uint32Array([QUAD_COUNT, LIGHT_INDEX, seeds[0], seeds[1], seeds[2]]));
+
+    const compute = encoder.beginComputePass();
+    compute.setPipeline(radiosityPipeline); compute.setBindGroup(0, radiosityBind); compute.dispatchWorkgroups(1024);
+    compute.setPipeline(publishPipeline); compute.setBindGroup(0, publishBind);
+    compute.dispatchWorkgroups(lightmapSize / 8, lightmapSize / 8, QUAD_COUNT);
+    if (mode === 1) {
+      compute.setPipeline(raytracerPipeline); compute.setBindGroup(0, radianceBindRay);
+      compute.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+    }
+    compute.end();
+
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: context.getCurrentTexture().createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store",
+      }],
+      depthStencilAttachment: mode === 0 ? {
+        view: depthView, depthClearValue: 1.0, depthLoadOp: "clear", depthStoreOp: "store",
+      } : undefined,
+    });
+    if (mode === 0) {
+      const fovY = 2 * Math.atan(camera.tanHalfFov);
+      const mvp = multiply(perspective(fovY, w / h, 0.5, 100), lookAt(basis.position, camera.target, [0, 1, 0]));
+      device.queue.writeBuffer(rasterUniforms, 0, mvp);
+      pass.setPipeline(rasterPipeline); pass.setBindGroup(0, rasterBind);
+      pass.setVertexBuffer(0, vertexBuffer); pass.setIndexBuffer(indexBuffer, "uint16");
+      pass.drawIndexed(indices.length);
+    } else {
+      pass.setPipeline(presentPipeline); pass.setBindGroup(0, radianceBindPresent);
+      pass.draw(3);
+    }
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+
+    const now = performance.now();
+    emaFrameMs = emaFrameMs * 0.9 + (now - (frame.lastAt || now)) * 0.1;
+    frame.lastAt = now;
+    if (now - lastStatus > 500) {
+      lastStatus = now;
+      const deg = (r) => Math.round(r * 180 / Math.PI);
+      hud.textContent =
+        `${Math.round(1000 / emaFrameMs)} fps · ${Math.round(photonsEmitted / 1e6)}M photons · ${modeNames[mode]}\n` +
+        `az ${deg(camera.azimuth)}°  el ${deg(camera.elevation)}°  zoom ${camera.radius.toFixed(1)}`;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+init().catch((error) => {
+  document.getElementById("fallback").hidden = false;
+  document.getElementById("fallback").textContent += " " + error;
+});
+</script>
+</body>
+</html>

@@ -75,6 +75,16 @@ tasks.register<JavaExec>("runWindow") {
     providers.gradleProperty("cornell.mode").orNull?.let { systemProperty("cornell.mode", it) }
 }
 
+// Regenerates webApp/generated from the Kotlin scene + shader sources: ./gradlew webGen
+tasks.register<JavaExec>("webGen") {
+    group = "build"
+    description = "Emit the web app's scene and shader constants from the Kotlin sources."
+    mainClass.set("org.graphiks.hellodawn4k.WebGenKt")
+    classpath = kotlin.targets["jvm"].compilations["main"].output.allOutputs + configurations["jvmRuntimeClasspath"]
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+    args("webApp/generated")
+}
+
 // Noise comparison between two framebuffer dumps: ./gradlew noiseMetric a.png b.png
 tasks.register<JavaExec>("noiseMetric") {
     group = "verification"
