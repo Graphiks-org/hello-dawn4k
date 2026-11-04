@@ -17,14 +17,19 @@
     font: 13px ui-monospace, Menlo, monospace; cursor: pointer;
   }
   #mode:hover { background: rgba(255,255,255,.15); }
-  #fallback { color: #fff; font: 14px ui-monospace, monospace; padding: 24px; }
+  #fallback {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 32px; color: #fff; background: #000;
+    font: 14px/1.6 ui-monospace, monospace; white-space: pre-wrap; z-index: 10;
+  }
+  #fallback[hidden] { display: none; }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div id="hud">Démarrage…</div>
 <button id="mode">Mode : rasterizer (M)</button>
-<div id="fallback" hidden>WebGPU n'est pas disponible dans ce navigateur.</div>
+<div id="fallback" hidden></div>
 
 <script src="generated/scene.js"></script>
 <script src="generated/shaders.js"></script>
@@ -90,15 +95,49 @@ function normalize(v) {
 }
 
 async function init() {
-  if (!navigator.gpu) { document.getElementById("fallback").hidden = false; return; }
+  const fallback = document.getElementById("fallback");
+  const fatalInit = (message) => {
+    fallback.hidden = false;
+    fallback.textContent = message;
+    document.getElementById("canvas").style.display = "none";
+    document.getElementById("hud").style.display = "none";
+    document.getElementById("mode").style.display = "none";
+  };
+  if (!navigator.gpu) {
+    fatalInit(
+      "WebGPU n'est pas disponible dans ce navigateur.\n" +
+      "Firefox : version 145+ sur Mac Apple Silicon (ou drapeau dom.webgpu.enabled dans about:config). " +
+      "Sinon, essayez Chrome, Edge ou Safari.",
+    );
+    return;
+  }
   const adapter = await navigator.gpu.requestAdapter();
-  if (!adapter) { document.getElementById("fallback").hidden = false; return; }
+  if (!adapter) {
+    fatalInit("Aucun adaptateur WebGPU ; la page exige un GPU (ou un adaptateur logiciel) accessible.");
+    return;
+  }
   const device = await adapter.requestDevice();
 
   const canvas = document.getElementById("canvas");
   const context = canvas.getContext("webgpu");
   const format = navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format, alphaMode: "opaque" });
+
+  // Every failure surfaces visibly on the black canvas: the old fallback div
+  // flowed below the 100vh canvas and never showed.
+  function fatal(message) {
+    fallback.hidden = false;
+    fallback.textContent = message;
+    canvas.style.display = "none";
+    document.getElementById("hud").style.display = "none";
+    document.getElementById("mode").style.display = "none";
+    throw new Error(message); // stop init
+  }
+  device.lost.then((info) => fatal(`Périphérique GPU perdu (${info.reason}) : ${info.message || ""}`));
+  device.addEventListener?.("uncapturederror", (error) => {
+    console.error(error.error);
+    fatal("Erreur WebGPU : " + (error.error?.message || error.error));
+  });
 
   const FLOATS_PER_QUAD = 24;
   const lightmapSize = 256;
@@ -116,11 +155,27 @@ async function init() {
     size: photonTexels * 12, usage: GPUBufferUsage.STORAGE,
   });
 
-  const lightmap = device.createTexture({
-    size: [lightmapSize, lightmapSize, QUAD_COUNT],
-    format: "rgba16float",
-    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-  });
+  // rgba16float storage textures are optional in core WebGPU; Chrome/Dawn have
+  // them, other implementations may not — fall back to rgba32float by patching
+  // the storage declaration in the radiosity shader.
+  let storageFormat = "rgba16float";
+  let radiosityCode = COMMON_WGSL + "\n" + RADIOSITY_WGSL;
+  let lightmap = null;
+  for (const candidate of ["rgba16float", "rgba32float"]) {
+    try {
+      lightmap = device.createTexture({
+        size: [lightmapSize, lightmapSize, QUAD_COUNT],
+        format: candidate,
+        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      storageFormat = candidate;
+      if (candidate === "rgba32float") radiosityCode = radiosityCode.replaceAll("rgba16float", "rgba32float");
+      break;
+    } catch (error) {
+      console.warn(`${candidate} storage texture refused:`, error);
+    }
+  }
+  if (!lightmap) fatal("Ni rgba16float ni rgba32float en texture de stockage : ce navigateur ne peut pas faire tourner la lightmap.");
   const lightmapView = lightmap.createView();
   const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
 
@@ -152,7 +207,7 @@ async function init() {
   function add(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
 
   // --- pipelines (auto layouts, same binding numbers as the Kotlin targets) ---
-  const radiosityModule = device.createShaderModule({ code: COMMON_WGSL + "\n" + RADIOSITY_WGSL });
+  const radiosityModule = device.createShaderModule({ code: radiosityCode });
   const radiosityPipeline = device.createComputePipeline({ layout: "auto", compute: { module: radiosityModule, entryPoint: "radiosity" } });
   const publishPipeline = device.createComputePipeline({ layout: "auto", compute: { module: radiosityModule, entryPoint: "publishLightmap" } });
   const raytracerModule = device.createShaderModule({ code: COMMON_WGSL + "\n" + RAYTRACER_WGSL });
@@ -271,6 +326,15 @@ async function init() {
   let emaFrameMs = 16, lastStatus = performance.now();
 
   function frame() {
+    try {
+      renderFrame();
+    } catch (error) {
+      fatal("Erreur de rendu : " + error.message);
+      return; // stop the loop
+    }
+    requestAnimationFrame(frame);
+  }
+  function renderFrame() {
     resize();
     const w = canvas.width, h = canvas.height;
     const basis = camera.basis();
@@ -338,15 +402,11 @@ async function init() {
         `${Math.round(1000 / emaFrameMs)} fps · ${Math.round(photonsEmitted / 1e6)}M photons · ${modeNames[mode]}\n` +
         `az ${deg(camera.azimuth)}°  el ${deg(camera.elevation)}°  zoom ${camera.radius.toFixed(1)}`;
     }
-    requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 }
 
-init().catch((error) => {
-  document.getElementById("fallback").hidden = false;
-  document.getElementById("fallback").textContent += " " + error;
-});
+init().catch((error) => console.error(error));
 </script>
 </body>
 </html>
