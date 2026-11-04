@@ -95,6 +95,36 @@ class CornellRenderer(
     // --- Radiosity (the sample's Radiosity): photons -> atomic u32 -> 256x256 lightmap ---
     private val lightmapSize = 256u
     private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
+
+    /**
+     * rgba16float write storage is optional in core WebGPU; Chromium/Dawn have it,
+     * Firefox may refuse the pipeline. Try 16f first, fall back to 32f by patching
+     * the storage declaration in the radiosity shader (sampling is format-agnostic).
+     */
+    private val radiosityCode: String
+    private val storageFormat: GPUTextureFormat
+
+    init {
+        var code = Shaders.COMMON_WGSL + "\n" + Shaders.RADIOSITY_WGSL
+        var format = GPUTextureFormat.RGBA16Float
+        val probeShader = device.createShaderModule(ShaderModuleDescriptor(code))
+        val probePipeline = try {
+            device.createComputePipeline(
+                ComputePipelineDescriptor(ProgrammableStage(probeShader, "radiosity")),
+            )
+        } catch (failure: Throwable) {
+            null
+        }
+        if (probePipeline == null) {
+            code = code.replace("rgba16float", "rgba32float")
+            format = GPUTextureFormat.RGBA32Float
+        }
+        probeShader.close()
+        probePipeline?.close()
+        radiosityCode = code
+        storageFormat = format
+    }
+
     private val photonAccumulation = device.createBuffer(
         BufferDescriptor(
             3uL * 4uL * lightmapSize * lightmapSize * scene.quadCount.toULong(),
@@ -104,7 +134,7 @@ class CornellRenderer(
     internal val lightmapTexture = device.createTexture(
         TextureDescriptor(
             size = Extent3D(lightmapSize, lightmapSize, scene.quadCount.toUInt()),
-            format = GPUTextureFormat.RGBA16Float,
+            format = storageFormat,
             usage = GPUTextureUsage.StorageBinding or GPUTextureUsage.TextureBinding,
         ),
     )
@@ -116,7 +146,7 @@ class CornellRenderer(
     private val photonParams = device.createBuffer(
         BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RADIOSITY_WGSL)))
+    private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(radiosityCode))
     private val radiosityPipeline = device.createComputePipeline(
         ComputePipelineDescriptor(ProgrammableStage(radiosityShader, "radiosity")),
     )
