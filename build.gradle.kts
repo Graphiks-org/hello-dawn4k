@@ -15,6 +15,11 @@ kotlin {
             compilerOptions.configure { jvmTarget.set(JvmTarget.JVM_17) }
         }
     }
+    // The web target: the same common renderer over the browser's native WebGPU.
+    wasmJs {
+        browser()
+        binaries.executable()
+    }
     // iOS device + simulator; the shared framework the Xcode app links.
     val iosArm64 = iosArm64()
     val iosSimulatorArm64 = iosSimulatorArm64()
@@ -28,8 +33,9 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                api("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                api("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                // dawn4k does not ship wasmJs: common code depends only on the portable
+                // WebGPU contracts; the native targets add Dawn through their own source sets.
+                api("org.graphiks:webgpu-api:0.1.0-SNAPSHOT")
                 // dawn4k exposes webgpu-descriptors only as an implementation dependency, so consumers redeclare it.
                 api("org.graphiks:webgpu-descriptors:0.1.0-SNAPSHOT")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
@@ -37,6 +43,8 @@ kotlin {
         }
         val jvmMain by getting {
             dependencies {
+                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
+                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
                 implementation("org.graphiks:dawn4k-toolkit-glfw:1.0.0-SNAPSHOT")
                 implementation("org.graphiks:kalligraphie:1.0.0-SNAPSHOT")
                 // The kalligraphie umbrella POM declares these runtime-only; the HUD needs them at compile time.
@@ -44,7 +52,31 @@ kotlin {
                 implementation("org.graphiks:shaping:1.0.0-SNAPSHOT")
                 implementation("org.graphiks:layout:1.0.0-SNAPSHOT")
                 implementation("org.graphiks:raster-cpu:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:webgpu-descriptors:0.1.0-SNAPSHOT")
+            }
+        }
+        val androidMain by getting {
+            dependencies {
+                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
+                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+            }
+        }
+        val iosArm64Main by getting {
+            dependencies {
+                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
+                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+            }
+        }
+        val iosSimulatorArm64Main by getting {
+            dependencies {
+                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
+                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+            }
+        }
+        val wasmJsMain by getting {
+            dependencies {
+                // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
+                implementation("org.graphiks:webgpu-browser:0.1.0-SNAPSHOT")
+                implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
             }
         }
     }
@@ -73,16 +105,6 @@ tasks.register<JavaExec>("runWindow") {
     providers.gradleProperty("cornell.orbit").orNull?.let { systemProperty("cornell.orbit", it) }
     providers.gradleProperty("cornell.hud").orNull?.let { systemProperty("cornell.hud", it) }
     providers.gradleProperty("cornell.mode").orNull?.let { systemProperty("cornell.mode", it) }
-}
-
-// Regenerates webApp/generated from the Kotlin scene + shader sources: ./gradlew webGen
-tasks.register<JavaExec>("webGen") {
-    group = "build"
-    description = "Emit the web app's scene and shader constants from the Kotlin sources."
-    mainClass.set("org.graphiks.hellodawn4k.WebGenKt")
-    classpath = kotlin.targets["jvm"].compilations["main"].output.allOutputs + configurations["jvmRuntimeClasspath"]
-    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
-    args("webApp/generated")
 }
 
 // Noise comparison between two framebuffer dumps: ./gradlew noiseMetric a.png b.png

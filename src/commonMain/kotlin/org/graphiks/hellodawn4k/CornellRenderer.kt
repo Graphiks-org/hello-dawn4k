@@ -1,9 +1,9 @@
 package org.graphiks.hellodawn4k
 
-import org.graphiks.dawn4k.DawnCommandEncoder
-import org.graphiks.dawn4k.toolkit.DawnSession
-import org.graphiks.dawn4k.toolkit.surface.DawnFrame
 import org.graphiks.webgpu.ArrayBuffer
+import org.graphiks.webgpu.GPUCommandEncoder
+import org.graphiks.webgpu.GPUDevice
+import org.graphiks.webgpu.GPUQueue
 import org.graphiks.webgpu.GPUBufferUsage
 import org.graphiks.webgpu.GPUCompareFunction
 import org.graphiks.webgpu.GPUFilterMode
@@ -43,6 +43,12 @@ const val WORKGROUP_SIZE = 8
 enum class RenderMode { RASTERIZER, RAYTRACER }
 
 /**
+ * One acquired presentation target: a borrowed texture view and its pixel extent.
+ * Hosts map their platform frame to this (swapchain frame, view target, canvas texture).
+ */
+class Frame(val view: GPUTextureView, val width: Int, val height: Int)
+
+/**
  * Owns every GPU resource of the Cornell box renderers, mirroring the webgpu-samples
  * classes: shared scene buffers (Common), the photon radiosity lightmap (Radiosity),
  * the raster pipeline over an indexed quad mesh (Rasterizer), the ray-traced lightmap
@@ -50,33 +56,37 @@ enum class RenderMode { RASTERIZER, RAYTRACER }
  * (GLFW window, Android DawnSurfaceView, iOS DawnMetalView) drive it through
  * [renderFrame] inside their own presentation scopes.
  */
-class CornellRenderer(internal val session: DawnSession, internal val format: GPUTextureFormat) : AutoCloseable {
+class CornellRenderer(
+    internal val device: GPUDevice,
+    internal val queue: GPUQueue,
+    internal val format: GPUTextureFormat,
+) : AutoCloseable {
     private var closed = false
     private val scene = CornellBox.scene()
     private val quadBytes = (scene.quadData.size * 4).toULong()
 
     // --- Shared scene buffers (the sample's Common) ---
-    internal val quads = session.device.createBuffer(
+    internal val quads = device.createBuffer(
         BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst),
     )
-    internal val params = session.device.createBuffer(
+    internal val params = device.createBuffer(
         BufferDescriptor(48uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
     internal var renderWidth = 640
     internal var renderHeight = 480
-    internal var radiance = session.device.createBuffer(
+    internal var radiance = device.createBuffer(
         BufferDescriptor((640 * 480 * 16).toULong(), GPUBufferUsage.Storage),
     )
-    internal val dims = session.device.createBuffer(
+    internal val dims = device.createBuffer(
         BufferDescriptor(16uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    private val cameraBuffer = session.device.createBuffer(
+    private val cameraBuffer = device.createBuffer(
         BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
 
     init {
-        session.queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
-        session.queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(640u, 480u, 0u, 0u)))
+        queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
+        queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(640u, 480u, 0u, 0u)))
     }
 
     /** The sample's concatenation pattern: every pass shader is common.wgsl + its own part. */
@@ -85,13 +95,13 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
     // --- Radiosity (the sample's Radiosity): photons -> atomic u32 -> 256x256 lightmap ---
     private val lightmapSize = 256u
     private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
-    private val photonAccumulation = session.device.createBuffer(
+    private val photonAccumulation = device.createBuffer(
         BufferDescriptor(
             3uL * 4uL * lightmapSize * lightmapSize * scene.quadCount.toULong(),
             GPUBufferUsage.Storage,
         ),
     )
-    internal val lightmapTexture = session.device.createTexture(
+    internal val lightmapTexture = device.createTexture(
         TextureDescriptor(
             size = Extent3D(lightmapSize, lightmapSize, scene.quadCount.toUInt()),
             format = GPUTextureFormat.RGBA16Float,
@@ -99,22 +109,22 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         ),
     )
     internal val lightmapView = lightmapTexture.createView()
-    internal val lightmapSampler = session.device.createSampler(SamplerDescriptor(
+    internal val lightmapSampler = device.createSampler(SamplerDescriptor(
         magFilter = GPUFilterMode.Linear,
         minFilter = GPUFilterMode.Linear,
     ))
-    private val photonParams = session.device.createBuffer(
+    private val photonParams = device.createBuffer(
         BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    private val radiosityShader = session.device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RADIOSITY_WGSL)))
-    private val radiosityPipeline = session.device.createComputePipeline(
+    private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RADIOSITY_WGSL)))
+    private val radiosityPipeline = device.createComputePipeline(
         ComputePipelineDescriptor(ProgrammableStage(radiosityShader, "radiosity")),
     )
-    private val publishPipeline = session.device.createComputePipeline(
+    private val publishPipeline = device.createComputePipeline(
         ComputePipelineDescriptor(ProgrammableStage(radiosityShader, "publishLightmap")),
     )
     private val radiosityLayout = radiosityPipeline.getBindGroupLayout(0u)
-    private val radiosityBinding = session.device.createBindGroup(
+    private val radiosityBinding = device.createBindGroup(
         BindGroupDescriptor(
             radiosityLayout,
             listOf(
@@ -127,7 +137,7 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         ),
     )
     private val publishLayout = publishPipeline.getBindGroupLayout(0u)
-    private val publishBinding = session.device.createBindGroup(
+    private val publishBinding = device.createBindGroup(
         BindGroupDescriptor(
             publishLayout,
             listOf(
@@ -142,12 +152,12 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         private set
 
     // --- Ray-traced lightmap view (the sample's Raytracer) ---
-    private val raytracerShader = session.device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RAYTRACER_WGSL)))
-    private val raytracerPipeline = session.device.createComputePipeline(
+    private val raytracerShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RAYTRACER_WGSL)))
+    private val raytracerPipeline = device.createComputePipeline(
         ComputePipelineDescriptor(ProgrammableStage(raytracerShader, "main")),
     )
     private val raytracerLayout = raytracerPipeline.getBindGroupLayout(0u)
-    private var raytracerBinding = session.device.createBindGroup(
+    private var raytracerBinding = device.createBindGroup(
         BindGroupDescriptor(
             raytracerLayout,
             listOf(
@@ -162,22 +172,22 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
     )
 
     // --- Rasterized lightmap view (the sample's Rasterizer, their default renderer) ---
-    internal val rasterUniforms = session.device.createBuffer(
+    internal val rasterUniforms = device.createBuffer(
         BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
     private val mesh = buildMesh()
     private val meshVertices: FloatArray get() = mesh.first
     internal val meshIndices: UShortArray get() = mesh.second
-    internal val vertexBuffer = session.device.createBuffer(
+    internal val vertexBuffer = device.createBuffer(
         BufferDescriptor((meshVertices.size * 4).toULong(), GPUBufferUsage.Vertex or GPUBufferUsage.CopyDst),
     )
-    internal val indexBuffer = session.device.createBuffer(
+    internal val indexBuffer = device.createBuffer(
         BufferDescriptor((meshIndices.size * 2).toULong(), GPUBufferUsage.Index or GPUBufferUsage.CopyDst),
     )
-    internal val rasterShader = session.device.createShaderModule(
+    internal val rasterShader = device.createShaderModule(
         ShaderModuleDescriptor(Shaders.RASTERIZER_WGSL),
     )
-    internal val rasterPipeline = session.device.createRenderPipeline(
+    internal val rasterPipeline = device.createRenderPipeline(
         RenderPipelineDescriptor(
             vertex = VertexState(
                 module = rasterShader,
@@ -207,7 +217,7 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         ),
     )
     private val rasterLayout = rasterPipeline.getBindGroupLayout(0u)
-    private val rasterBinding = session.device.createBindGroup(
+    private val rasterBinding = device.createBindGroup(
         BindGroupDescriptor(
             rasterLayout,
             listOf(BindGroupEntry(0u, rasterUniforms), BindGroupEntry(1u, lightmapView), BindGroupEntry(2u, lightmapSampler)),
@@ -219,10 +229,10 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
     private var depthHeight = 0
 
     // --- Tonemapping present pass (the sample's tonemapper, fullscreen) ---
-    internal val presentShader = session.device.createShaderModule(
+    internal val presentShader = device.createShaderModule(
         ShaderModuleDescriptor(Shaders.PRESENT_WGSL),
     )
-    internal val presentPipeline = session.device.createRenderPipeline(
+    internal val presentPipeline = device.createRenderPipeline(
         RenderPipelineDescriptor(
             vertex = VertexState(module = presentShader, entryPoint = "vs"),
             fragment = FragmentState(
@@ -233,18 +243,18 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         ),
     )
     private val presentLayout = presentPipeline.getBindGroupLayout(0u)
-    private var presentBinding = session.device.createBindGroup(
+    private var presentBinding = device.createBindGroup(
         BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
     )
 
     init {
-        session.queue.writeBuffer(vertexBuffer, 0uL, ArrayBuffer.of(meshVertices))
-        session.queue.writeBuffer(indexBuffer, 0uL, ArrayBuffer.of(meshIndices))
+        queue.writeBuffer(vertexBuffer, 0uL, ArrayBuffer.of(meshVertices))
+        queue.writeBuffer(indexBuffer, 0uL, ArrayBuffer.of(meshIndices))
     }
 
     /** Writes the camera basis uniform; called whenever the orbit controls move. */
     fun updateCamera(basis: CameraBasis) {
-        session.queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
+        queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
     }
 
     private var resizePending = false
@@ -265,12 +275,12 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         if (width <= 0 || height <= 0 || (width == renderWidth && height == renderHeight)) return
         renderWidth = width
         renderHeight = height
-        val replacement = session.device.createBuffer(
+        val replacement = device.createBuffer(
             BufferDescriptor((width * height * 16).toULong(), GPUBufferUsage.Storage),
         )
-        session.queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(width.toUInt(), height.toUInt(), 0u, 0u)))
+        queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(width.toUInt(), height.toUInt(), 0u, 0u)))
         raytracerBinding.close()
-        raytracerBinding = session.device.createBindGroup(
+        raytracerBinding = device.createBindGroup(
             BindGroupDescriptor(
                 raytracerLayout,
                 listOf(
@@ -284,7 +294,7 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
             ),
         )
         presentBinding.close()
-        presentBinding = session.device.createBindGroup(
+        presentBinding = device.createBindGroup(
             BindGroupDescriptor(presentLayout, listOf(BindGroupEntry(0u, replacement), BindGroupEntry(1u, dims))),
         )
         radiance.close()
@@ -300,13 +310,13 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
      * [extraPass] lets the host draw directly over the presented frame (the desktop HUD).
      */
     fun renderFrame(
-        frame: DawnFrame,
+        frame: Frame,
         mode: RenderMode,
         orbit: OrbitCamera,
-        extraPass: ((DawnCommandEncoder, DawnFrame) -> Unit)? = null,
+        extraPass: ((GPUCommandEncoder, Frame) -> Unit)? = null,
     ) {
-        ensureRenderSize(frame.extent.width, frame.extent.height)
-        session.queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
+        ensureRenderSize(frame.width, frame.height)
+        queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
             scene.quadCount.toUInt(),
             renderWidth.toUInt(),
             renderHeight.toUInt(),
@@ -316,18 +326,18 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         )))
         val workgroupsX = ((renderWidth + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
         val workgroupsY = ((renderHeight + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
-        (session.device.createCommandEncoder() as DawnCommandEncoder).use { encoder ->
-            encoder.beginComputePass().use { pass ->
-                try {
-                    runRadiosity(pass)
-                    if (mode == RenderMode.RAYTRACER) {
-                        pass.setPipeline(raytracerPipeline)
-                        pass.setBindGroup(0u, raytracerBinding)
-                        pass.dispatchWorkgroups(workgroupsX, workgroupsY)
-                    }
-                } finally {
-                    pass.end()
+        val encoder = device.createCommandEncoder()
+        try {
+            val pass = encoder.beginComputePass()
+            try {
+                runRadiosity(pass)
+                if (mode == RenderMode.RAYTRACER) {
+                    pass.setPipeline(raytracerPipeline)
+                    pass.setBindGroup(0u, raytracerBinding)
+                    pass.dispatchWorkgroups(workgroupsX, workgroupsY)
                 }
+            } finally {
+                pass.end()
             }
             if (mode == RenderMode.RASTERIZER) {
                 rasterize(encoder, frame, orbit)
@@ -335,7 +345,9 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
                 present(encoder, frame)
             }
             extraPass?.invoke(encoder, frame)
-            encoder.finish().use { session.queue.submit(listOf(it)) }
+            encoder.finish().use { queue.submit(listOf(it)) }
+        } finally {
+            encoder.close()
         }
     }
 
@@ -354,7 +366,7 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
         accumulationMean *= bufferScale
         photonsEmitted += photonsPerFrame.toDouble()
         val seeds = kotlin.random.Random.Default
-        session.queue.writeBuffer(photonParams, 0uL, ArrayBuffer.of(floatArrayOf(
+        queue.writeBuffer(photonParams, 0uL, ArrayBuffer.of(floatArrayOf(
             toLightmapScale.toFloat(),
             bufferScale.toFloat(),
             Float.fromBits(scene.quadCount),
@@ -373,9 +385,9 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
     }
 
     /** The sample's rasterizer: MVP over the indexed quad mesh, tonemapped inline. */
-    private fun rasterize(encoder: DawnCommandEncoder, frame: DawnFrame, orbit: OrbitCamera) {
-        val extentWidth = frame.extent.width
-        val extentHeight = frame.extent.height
+    private fun rasterize(encoder: GPUCommandEncoder, frame: Frame, orbit: OrbitCamera) {
+        val extentWidth = frame.width
+        val extentHeight = frame.height
         val basis = orbit.basis()
         // The sample's 45-degree fov is NOT ours: the orbit camera frames the box at
         // 2*atan(0.30); using it here made M look like it moved the camera.
@@ -384,11 +396,11 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
             Mat4.perspective(fovY, extentWidth.toFloat() / extentHeight, 0.5f, 100f),
             Mat4.lookAt(basis.position, orbit.target, V3(0f, 1f, 0f)),
         )
-        session.queue.writeBuffer(rasterUniforms, 0uL, ArrayBuffer.of(mvp))
+        queue.writeBuffer(rasterUniforms, 0uL, ArrayBuffer.of(mvp))
         if (depthWidth != extentWidth || depthHeight != extentHeight) {
             depthView?.close()
             depthTexture?.close()
-            depthTexture = session.device.createTexture(
+            depthTexture = device.createTexture(
                 TextureDescriptor(
                     size = Extent3D(extentWidth.toUInt(), extentHeight.toUInt()),
                     format = GPUTextureFormat.Depth24Plus,
@@ -399,51 +411,51 @@ class CornellRenderer(internal val session: DawnSession, internal val format: GP
             depthWidth = extentWidth
             depthHeight = extentHeight
         }
-        encoder.beginRenderPass(RenderPassDescriptor(
-            colorAttachments = listOf(
-                RenderPassColorAttachment(
-                    frame.view,
-                    loadOp = GPULoadOp.Clear,
-                    storeOp = GPUStoreOp.Store,
-                    clearValue = Color(0.0, 0.0, 0.0, 1.0),
+        val rasterPass = encoder.beginRenderPass(
+            RenderPassDescriptor(
+                colorAttachments = listOf(
+                    RenderPassColorAttachment(
+                        frame.view,
+                        loadOp = GPULoadOp.Clear,
+                        storeOp = GPUStoreOp.Store,
+                        clearValue = Color(0.0, 0.0, 0.0, 1.0),
+                    ),
+                ),
+                depthStencilAttachment = RenderPassDepthStencilAttachment(
+                    view = depthView!!,
+                    depthClearValue = 1.0f,
+                    depthLoadOp = GPULoadOp.Clear,
+                    depthStoreOp = GPUStoreOp.Store,
                 ),
             ),
-            depthStencilAttachment = RenderPassDepthStencilAttachment(
-                view = depthView!!,
-                depthClearValue = 1.0f,
-                depthLoadOp = GPULoadOp.Clear,
-                depthStoreOp = GPUStoreOp.Store,
-            ),
-        )).use { pass ->
-            try {
-                pass.setPipeline(rasterPipeline)
-                pass.setBindGroup(0u, rasterBinding)
-                pass.setVertexBuffer(0u, vertexBuffer)
-                pass.setIndexBuffer(indexBuffer, GPUIndexFormat.Uint16)
-                pass.drawIndexed(meshIndices.size.toUInt())
-            } finally {
-                pass.end()
-            }
+        )
+        try {
+            rasterPass.setPipeline(rasterPipeline)
+            rasterPass.setBindGroup(0u, rasterBinding)
+            rasterPass.setVertexBuffer(0u, vertexBuffer)
+            rasterPass.setIndexBuffer(indexBuffer, GPUIndexFormat.Uint16)
+            rasterPass.drawIndexed(meshIndices.size.toUInt())
+        } finally {
+            rasterPass.end()
         }
     }
 
     /** The sample's tonemapper folded into a fullscreen pass over the radiance buffer. */
-    private fun present(encoder: DawnCommandEncoder, frame: DawnFrame) {
-        encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
+    private fun present(encoder: GPUCommandEncoder, frame: Frame) {
+        val pass = encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
             RenderPassColorAttachment(
                 frame.view,
                 loadOp = GPULoadOp.Clear,
                 storeOp = GPUStoreOp.Store,
                 clearValue = Color(0.0, 0.0, 0.0, 1.0),
             ),
-        ))).use { pass ->
-            try {
-                pass.setPipeline(presentPipeline)
-                pass.setBindGroup(0u, presentBinding)
-                pass.draw(3u)
-            } finally {
-                pass.end()
-            }
+        )))
+        try {
+            pass.setPipeline(presentPipeline)
+            pass.setBindGroup(0u, presentBinding)
+            pass.draw(3u)
+        } finally {
+            pass.end()
         }
     }
 

@@ -129,7 +129,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             val target = metal.target
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
-                val renderer = CornellRenderer(gpu, checkNotNull(presentation.configuration.value).format)
+                val renderer = CornellRenderer(gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format)
                 val timeSource = kotlin.time.TimeSource.Monotonic
                 var lastStatusAt = timeSource.markNow()
                 var emaFrameMs = 16.0
@@ -141,7 +141,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
                         }
                         val frameStartedAt = timeSource.markNow()
                         presentation.withFrame { frame ->
-                            renderer.renderFrame(frame, mode, camera)
+                            renderer.renderFrame(org.graphiks.hellodawn4k.Frame(frame.view, frame.extent.width, frame.extent.height), mode, camera)
                             frame.present()
                         }
                         renderer.consumeResize()
