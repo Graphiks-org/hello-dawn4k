@@ -86,6 +86,7 @@ fun main() {
         })
 
         var lastStatusAt = -1.0
+        var lastFrameAt = -1.0
         var emaFrameMs = 16.0
 
         fun tick() {
@@ -104,9 +105,10 @@ fun main() {
             renderer.consumeResize()
 
             val now = window.performance.now()
-            if (lastStatusAt >= 0.0) {
-                emaFrameMs = emaFrameMs * 0.9 + (now - lastStatusAt) * 0.1
+            if (lastFrameAt >= 0.0) {
+                emaFrameMs = emaFrameMs * 0.9 + (now - lastFrameAt) * 0.1
             }
+            lastFrameAt = now
             if (now - lastStatusAt > 500 || lastStatusAt < 0.0) {
                 lastStatusAt = now
                 hud.textContent = statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
