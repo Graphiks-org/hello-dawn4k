@@ -35,6 +35,10 @@ private const val GLFW_KEY_ESCAPE = 256
  */
 fun main() = runBlocking {
     val frameLimit = System.getProperty("cornell.frames")?.toIntOrNull() ?: 0
+    // Deterministic-radiosity hook for A/B dump comparisons: fixes the CPU seed
+    // stream the photon passes consume, so identical code renders identical pixels.
+    val photonRandom = System.getProperty("cornell.seed")?.toLongOrNull()
+        ?.let { kotlin.random.Random(it) }
     val initialMode = when (System.getProperty("cornell.mode")) {
         "raytracer", "ray" -> RenderMode.RAYTRACER
         else -> RenderMode.RASTERIZER
@@ -57,7 +61,7 @@ fun main() = runBlocking {
         val controls = OrbitControls(window, camera)
         val watcher = launch { controls.collect() }
         try {
-            renderCornellFrames(gpu, presentation, frameLimit, controls, initialMode)
+            renderCornellFrames(gpu, presentation, frameLimit, controls, initialMode, photonRandom)
         } finally {
             watcher.cancelAndJoin()
         }
@@ -113,9 +117,13 @@ private suspend fun renderCornellFrames(
     frameLimit: Int,
     controls: OrbitControls,
     initialMode: RenderMode = RenderMode.RASTERIZER,
+    photonRandom: kotlin.random.Random? = null,
 ) {
     require(frameLimit >= 0)
-    val renderer = CornellRenderer(gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format)
+    val renderer = CornellRenderer(
+        gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format,
+        photonRandom ?: kotlin.random.Random.Default,
+    )
     val hudText = if (System.getProperty("cornell.hud") != "false") HudText.open() else null
     val hudRenderer = hudText?.let { HudRenderer(gpu, it) }
     val adapterName = gpu.adapter.info.description

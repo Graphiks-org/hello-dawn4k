@@ -105,6 +105,8 @@ tasks.register<JavaExec>("runWindow") {
     providers.gradleProperty("cornell.orbit").orNull?.let { systemProperty("cornell.orbit", it) }
     providers.gradleProperty("cornell.hud").orNull?.let { systemProperty("cornell.hud", it) }
     providers.gradleProperty("cornell.mode").orNull?.let { systemProperty("cornell.mode", it) }
+    // Deterministic photon seeds for A/B dump comparisons: -Pcornell.seed=42
+    providers.gradleProperty("cornell.seed").orNull?.let { systemProperty("cornell.seed", it) }
 }
 
 // Noise comparison between two framebuffer dumps: ./gradlew noiseMetric a.png b.png

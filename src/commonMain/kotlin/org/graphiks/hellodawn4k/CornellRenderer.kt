@@ -60,6 +60,8 @@ class CornellRenderer(
     internal val device: GPUDevice,
     internal val queue: GPUQueue,
     internal val format: GPUTextureFormat,
+    /** Seed stream for the photon passes; inject a seeded Random for deterministic dumps. */
+    private val photonRandom: kotlin.random.Random = kotlin.random.Random.Default,
 ) : AutoCloseable {
     private var closed = false
     private val scene = CornellBox.scene()
@@ -478,7 +480,7 @@ class CornellRenderer(
         val bufferScale = if (accumulationMean > 2 * 0x10000000) 0.5 else 1.0
         accumulationMean *= bufferScale
         photonsEmitted += photonsPerFrame.toDouble()
-        val seeds = kotlin.random.Random.Default
+        val seeds = photonRandom
         queue.writeBuffer(photonParams, 0uL, ArrayBuffer.of(floatArrayOf(
             toLightmapScale.toFloat(),
             bufferScale.toFloat(),
