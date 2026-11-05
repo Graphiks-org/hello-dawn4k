@@ -61,12 +61,17 @@ fn rngFloat(rng: ptr<function, Rng>) -> f32 {
 }
 
 fn randUnitSphere(rng: ptr<function, Rng>) -> vec3f {
+    // WGSL requires a function that returns a value to end with a return statement.
+    // naga (Firefox) enforces this; Tint (Chrome) does not — so a return that only
+    // lives inside the loop is a Firefox-only compile failure. Break out, then return.
+    var candidate = vec3f(0.0, 0.0, 0.0);
     loop {
-        let candidate = vec3f(rngFloat(rng), rngFloat(rng), rngFloat(rng)) * 2.0 - vec3f(1.0);
+        candidate = vec3f(rngFloat(rng), rngFloat(rng), rngFloat(rng)) * 2.0 - vec3f(1.0);
         if (dot(candidate, candidate) < 1.0) {
-            return candidate;
+            break;
         }
     }
+    return candidate;
 }
 
 /** Returns (t, u, v); t < 0 on miss. */
