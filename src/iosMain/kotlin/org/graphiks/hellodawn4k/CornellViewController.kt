@@ -60,7 +60,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         metal = DawnMetalView(CGRectMake(0.0, 0.0, 640.0, 480.0))
         view = metal
         status = UILabel(CGRectMake(24.0, 50.0, 1100.0, 80.0)).apply {
-            text = "Démarrage…"
+            text = "Starting…"
             numberOfLines = 0
             textColor = UIColor.whiteColor
         }
@@ -125,7 +125,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     override fun viewDidAppear(animated: Boolean) {
         super.viewDidAppear(animated)
         if (rendering != null) return
-        status.text = "Démarrage…"
+        status.text = "Starting…"
         val previousCleanup = cleanup
         rendering = scope.launch {
             previousCleanup?.join()

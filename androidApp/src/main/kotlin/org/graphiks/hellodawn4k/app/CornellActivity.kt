@@ -49,7 +49,7 @@ class CornellActivity : Activity(), CornellHostState {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        status = TextView(this).apply { text = "Démarrage…" }
+        status = TextView(this).apply { text = "Starting…" }
         surface = DawnSurfaceView(this)
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -108,7 +108,7 @@ class CornellActivity : Activity(), CornellHostState {
 
     override fun onStart() {
         super.onStart()
-        status.text = "Démarrage…"
+        status.text = "Starting…"
         val previousCleanup = cleanup
         rendering = scope.launch {
             previousCleanup?.join()

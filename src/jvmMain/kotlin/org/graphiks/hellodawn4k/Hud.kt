@@ -198,7 +198,7 @@ class HudText private constructor(
                 java.nio.file.Files.copy(resource, dir.resolve("LiberationSans-Regular.ttf"))
                 attempts.add(
                     CaptureAttempt(
-                        label = "Liberation Sans embarquée",
+                        label = "bundled Liberation Sans",
                         families = listOf("Liberation Sans"),
                         tempDir = dir,
                         open = {
@@ -215,7 +215,7 @@ class HudText private constructor(
             )
             attempts.add(
                 CaptureAttempt(
-                    label = "scan système macOS",
+                    label = "macOS system font scan",
                     families = listOf("Menlo", "Monaco", "Courier New"),
                     tempDir = null,
                     open = { MacosSystemFontCatalog.open(raisedLimits) },

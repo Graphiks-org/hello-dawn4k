@@ -36,14 +36,14 @@ fun main() {
     scope.launch {
         val adapter = requestAdapter(
             RequestAdapterOptions(powerPreference = GPUPowerPreference.HighPerformance),
-        ).getOrElse { failure -> fatal("Aucun adaptateur WebGPU : $failure") }
-        val device = adapter.requestDevice().getOrElse { failure -> fatal("Device refusé : $failure") }
+        ).getOrElse { failure -> fatal("No WebGPU adapter: $failure") }
+        val device = adapter.requestDevice().getOrElse { failure -> fatal("Device request rejected: $failure") }
 
         val domCanvas = document.getElementById("canvas") as? HTMLCanvasElement
-            ?: return@launch fatal("canvas manquant")
+            ?: return@launch fatal("missing canvas element")
         val surface: CanvasSurface = domCanvas.unsafeCast<GpuCanvasElement>().getCanvasSurface()
         val format = surface.preferredCanvasFormat
-            ?: return@launch fatal("Le navigateur n'expose pas de format de canvas préféré.")
+            ?: return@launch fatal("The browser exposes no preferred canvas format.")
         surface.configure(SurfaceConfiguration(device = device, format = format))
 
         val renderer = CornellRenderer(device, device.queue, format)
@@ -52,7 +52,7 @@ fun main() {
 
         fun toggleMode() {
             mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
-            modeButton.textContent = "Mode : ${if (mode == RenderMode.RASTERIZER) "rasterizer" else "raytracer"} (M)"
+            modeButton.textContent = "Mode: ${if (mode == RenderMode.RASTERIZER) "rasterizer" else "raytracer"} (M)"
         }
         modeButton.onclick = { toggleMode() }
         document.onkeydown = { event: Event ->
