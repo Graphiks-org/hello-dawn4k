@@ -1,22 +1,31 @@
 package org.graphiks.hellodawn4k
 
+import kotlin.random.Random
 import org.graphiks.webgpu.ArrayBuffer
-import org.graphiks.webgpu.GPUCommandEncoder
-import org.graphiks.webgpu.GPUDevice
-import org.graphiks.webgpu.GPUQueue
+import org.graphiks.webgpu.GPUBufferBindingType
 import org.graphiks.webgpu.GPUBufferUsage
+import org.graphiks.webgpu.GPUCommandEncoder
 import org.graphiks.webgpu.GPUCompareFunction
+import org.graphiks.webgpu.GPUComputePassEncoder
+import org.graphiks.webgpu.GPUDevice
 import org.graphiks.webgpu.GPUFilterMode
 import org.graphiks.webgpu.GPUIndexFormat
 import org.graphiks.webgpu.GPULoadOp
+import org.graphiks.webgpu.GPUQueue
+import org.graphiks.webgpu.GPUShaderStage
+import org.graphiks.webgpu.GPUStorageTextureAccess
 import org.graphiks.webgpu.GPUStoreOp
 import org.graphiks.webgpu.GPUTexture
 import org.graphiks.webgpu.GPUTextureFormat
 import org.graphiks.webgpu.GPUTextureUsage
 import org.graphiks.webgpu.GPUTextureView
+import org.graphiks.webgpu.GPUTextureViewDimension
 import org.graphiks.webgpu.GPUVertexFormat
 import org.graphiks.webgpu.descriptors.BindGroupDescriptor
 import org.graphiks.webgpu.descriptors.BindGroupEntry
+import org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor
+import org.graphiks.webgpu.descriptors.BindGroupLayoutEntry
+import org.graphiks.webgpu.descriptors.BufferBindingLayout
 import org.graphiks.webgpu.descriptors.BufferDescriptor
 import org.graphiks.webgpu.descriptors.Color
 import org.graphiks.webgpu.descriptors.ColorTargetState
@@ -24,14 +33,18 @@ import org.graphiks.webgpu.descriptors.ComputePipelineDescriptor
 import org.graphiks.webgpu.descriptors.DepthStencilState
 import org.graphiks.webgpu.descriptors.Extent3D
 import org.graphiks.webgpu.descriptors.FragmentState
+import org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor
 import org.graphiks.webgpu.descriptors.PrimitiveState
 import org.graphiks.webgpu.descriptors.ProgrammableStage
 import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
 import org.graphiks.webgpu.descriptors.RenderPassDepthStencilAttachment
 import org.graphiks.webgpu.descriptors.RenderPassDescriptor
 import org.graphiks.webgpu.descriptors.RenderPipelineDescriptor
+import org.graphiks.webgpu.descriptors.SamplerBindingLayout
 import org.graphiks.webgpu.descriptors.SamplerDescriptor
 import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
+import org.graphiks.webgpu.descriptors.StorageTextureBindingLayout
+import org.graphiks.webgpu.descriptors.TextureBindingLayout
 import org.graphiks.webgpu.descriptors.TextureDescriptor
 import org.graphiks.webgpu.descriptors.VertexAttribute
 import org.graphiks.webgpu.descriptors.VertexBufferLayout
@@ -61,7 +74,7 @@ class CornellRenderer(
     internal val queue: GPUQueue,
     internal val format: GPUTextureFormat,
     /** Seed stream for the photon passes; inject a seeded Random for deterministic dumps. */
-    private val photonRandom: kotlin.random.Random = kotlin.random.Random.Default,
+    private val photonRandom: Random = Random.Default,
 ) : AutoCloseable {
     private var closed = false
     private val scene = CornellBox.scene()
@@ -126,52 +139,52 @@ class CornellRenderer(
     // include unused bindings declared in the common module, causing a mismatch with
     // the bind group and an invalid pipeline. Explicit layouts pin the interface.
     private val radiosityBindGroupLayout = device.createBindGroupLayout(
-        org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor(listOf(
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                0u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.ReadOnlyStorage,
+        BindGroupLayoutDescriptor(listOf(
+            BindGroupLayoutEntry(
+                0u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.ReadOnlyStorage,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                2u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+            BindGroupLayoutEntry(
+                2u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                4u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Storage,
+            BindGroupLayoutEntry(
+                4u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Storage,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                5u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                storageTexture = org.graphiks.webgpu.descriptors.StorageTextureBindingLayout(
+            BindGroupLayoutEntry(
+                5u, GPUShaderStage.Compute,
+                storageTexture = StorageTextureBindingLayout(
                     format = GPUTextureFormat.RGBA16Float,
-                    access = org.graphiks.webgpu.GPUStorageTextureAccess.WriteOnly,
-                    viewDimension = org.graphiks.webgpu.GPUTextureViewDimension.TwoDArray,
+                    access = GPUStorageTextureAccess.WriteOnly,
+                    viewDimension = GPUTextureViewDimension.TwoDArray,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                6u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+            BindGroupLayoutEntry(
+                6u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
                 ),
             ),
         )),
     )
     private val radiosityPipelineLayout = device.createPipelineLayout(
-        org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor(listOf(radiosityBindGroupLayout)),
+        PipelineLayoutDescriptor(listOf(radiosityBindGroupLayout)),
     )
     private val radiosityPipeline = device.createComputePipeline(
-        org.graphiks.webgpu.descriptors.ComputePipelineDescriptor(
+        ComputePipelineDescriptor(
             layout = radiosityPipelineLayout,
             compute = ProgrammableStage(radiosityShader, "radiosity"),
         ),
     )
     private val publishPipeline = device.createComputePipeline(
-        org.graphiks.webgpu.descriptors.ComputePipelineDescriptor(
+        ComputePipelineDescriptor(
             layout = radiosityPipelineLayout,
             compute = ProgrammableStage(radiosityShader, "publishLightmap"),
         ),
@@ -207,48 +220,48 @@ class CornellRenderer(
     // --- Ray-traced lightmap view (the sample's Raytracer) ---
     private val raytracerShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RAYTRACER_WGSL)))
     private val raytracerBindGroupLayout = device.createBindGroupLayout(
-        org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor(listOf(
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                0u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.ReadOnlyStorage,
+        BindGroupLayoutDescriptor(listOf(
+            BindGroupLayoutEntry(
+                0u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.ReadOnlyStorage,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                1u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Storage,
+            BindGroupLayoutEntry(
+                1u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Storage,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                2u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+            BindGroupLayoutEntry(
+                2u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                3u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+            BindGroupLayoutEntry(
+                3u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                4u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                texture = org.graphiks.webgpu.descriptors.TextureBindingLayout(
-                    viewDimension = org.graphiks.webgpu.GPUTextureViewDimension.TwoDArray,
+            BindGroupLayoutEntry(
+                4u, GPUShaderStage.Compute,
+                texture = TextureBindingLayout(
+                    viewDimension = GPUTextureViewDimension.TwoDArray,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                5u, org.graphiks.webgpu.GPUShaderStage.Compute,
-                sampler = org.graphiks.webgpu.descriptors.SamplerBindingLayout(),
+            BindGroupLayoutEntry(
+                5u, GPUShaderStage.Compute,
+                sampler = SamplerBindingLayout(),
             ),
         )),
     )
     private val raytracerPipelineLayout = device.createPipelineLayout(
-        org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor(listOf(raytracerBindGroupLayout)),
+        PipelineLayoutDescriptor(listOf(raytracerBindGroupLayout)),
     )
     private val raytracerPipeline = device.createComputePipeline(
-        org.graphiks.webgpu.descriptors.ComputePipelineDescriptor(
+        ComputePipelineDescriptor(
             layout = raytracerPipelineLayout,
             compute = ProgrammableStage(raytracerShader, "main"),
         ),
@@ -329,23 +342,23 @@ class CornellRenderer(
         ShaderModuleDescriptor(Shaders.PRESENT_WGSL),
     )
     private val presentBindGroupLayout = device.createBindGroupLayout(
-        org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor(listOf(
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                0u, org.graphiks.webgpu.GPUShaderStage.Fragment,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.ReadOnlyStorage,
+        BindGroupLayoutDescriptor(listOf(
+            BindGroupLayoutEntry(
+                0u, GPUShaderStage.Fragment,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.ReadOnlyStorage,
                 ),
             ),
-            org.graphiks.webgpu.descriptors.BindGroupLayoutEntry(
-                1u, org.graphiks.webgpu.GPUShaderStage.Fragment,
-                buffer = org.graphiks.webgpu.descriptors.BufferBindingLayout(
-                    type = org.graphiks.webgpu.GPUBufferBindingType.Uniform,
+            BindGroupLayoutEntry(
+                1u, GPUShaderStage.Fragment,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
                 ),
             ),
         )),
     )
     private val presentPipelineLayout = device.createPipelineLayout(
-        org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor(listOf(presentBindGroupLayout)),
+        PipelineLayoutDescriptor(listOf(presentBindGroupLayout)),
     )
     internal val presentPipeline = device.createRenderPipeline(
         RenderPipelineDescriptor(
@@ -473,7 +486,7 @@ class CornellRenderer(
      * Seeds are fresh CPU randoms each frame (the sample's route) so successive frames
      * never retrace the same photons. Mirrors the webgpu-samples overflow rescaling.
      */
-    private fun runRadiosity(pass: org.graphiks.webgpu.GPUComputePassEncoder) {
+    private fun runRadiosity(pass: GPUComputePassEncoder) {
         val photonsPerFrame = 256u * 1024u
         accumulationMean += (photonsPerFrame.toDouble() * 100000.0) / photonTexels
         val toLightmapScale = 1.0 / accumulationMean
