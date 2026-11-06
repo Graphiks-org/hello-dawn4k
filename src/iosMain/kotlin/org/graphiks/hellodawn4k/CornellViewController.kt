@@ -6,10 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -22,24 +19,30 @@ import platform.UIKit.UILabel
 import platform.UIKit.UITouch
 import platform.UIKit.UIViewController
 import platform.UIKit.addSubview
-import kotlin.math.roundToInt
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * iOS host over the shared Cornell renderer: UIKit owns the DawnMetalView (Metal-backed),
  * one finger drags orbit the camera, a double tap toggles rasterizer/raytracer. GPU
  * cleanup suspends without blocking UIKit's main queue, like the toolkit's sample host.
  */
-fun CornellViewController(): UIViewController = object : UIViewController(nibName = null, bundle = null) {
+fun CornellViewController(): UIViewController = object : UIViewController(nibName = null, bundle = null), CornellHostState {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val camera = OrbitCamera()
-    private var mode = RenderMode.RASTERIZER
-    private var cameraDirty = true
+    override val camera = OrbitCamera()
+    private var _mode = RenderMode.RASTERIZER
+    private var _cameraDirty = true
+    override val mode: RenderMode get() = _mode
+    override val cameraDirty: Boolean get() = _cameraDirty
+    override fun consumeCameraDirty() { _cameraDirty = false }
+    private fun dirtyCamera() { _cameraDirty = true }
     private var rendering: kotlinx.coroutines.Job? = null
     private var cleanup: kotlinx.coroutines.Job? = null
     private var lastDownAt = 0.0
     private var lastPointer: Pair<Double, Double>? = null
     private var lastPinchDistance: Double? = null
+
+    override suspend fun showStatus(text: String) {
+        withContext(Dispatchers.Main) { status.text = text }
+    }
 
     private fun pinchDistance(touches: Set<*>): Double? {
         val first = touches.elementAtOrNull(0) as? UITouch ?: return null
@@ -83,7 +86,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         val location = touch.locationInView(metal).useContents { x to y }
         val now = touch.timestamp
         if (now - lastDownAt < 0.3) {
-            mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+            _mode = if (_mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
         }
         lastDownAt = now
         lastPointer = location
@@ -99,7 +102,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             lastPinchDistance = distance
             if (previous != null && previous > 1.0) {
                 camera.zoomRatio(distance / previous)
-                cameraDirty = true
+                dirtyCamera()
             }
             return
         }
@@ -109,7 +112,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         lastPointer = location
         if (previous != null) {
             camera.drag(location.first - previous.first, location.second - previous.second)
-            cameraDirty = true
+            dirtyCamera()
         }
     }
 
@@ -129,35 +132,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             val target = metal.target
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
-                val renderer = CornellRenderer(gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format)
-                val timeSource = kotlin.time.TimeSource.Monotonic
-                var lastStatusAt = timeSource.markNow()
-                var emaFrameMs = 16.0
-                try {
-                    while (currentCoroutineContext().isActive) {
-                        if (cameraDirty) {
-                            cameraDirty = false
-                            renderer.updateCamera(camera.basis())
-                        }
-                        val frameStartedAt = timeSource.markNow()
-                        presentation.withFrame { frame ->
-                            renderer.renderFrame(org.graphiks.hellodawn4k.Frame(frame.view, frame.extent.width, frame.extent.height), mode, camera)
-                            frame.present()
-                        }
-                        renderer.consumeResize()
-                        emaFrameMs = emaFrameMs * 0.9 + (frameStartedAt.elapsedNow().inWholeNanoseconds / 1_000_000.0) * 0.1
-                        if (timeSource.markNow() - lastStatusAt > 500.milliseconds) {
-                            lastStatusAt = timeSource.markNow()
-                            val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, mode, camera)
-                                .joinToString("\n")
-                            withContext(Dispatchers.Main) { status.text = text }
-                        }
-                        delay(16)
-                    }
-                } finally {
-                    renderer.close()
-                    gpu.queue.onSubmittedWorkDone().getOrThrow()
-                }
+                gpu.runCornellLoop(presentation, this@CornellViewController)
             }
         }
     }

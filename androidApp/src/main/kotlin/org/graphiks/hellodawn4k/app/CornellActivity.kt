@@ -10,34 +10,31 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.graphiks.dawn4k.toolkit.DawnSession
-import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
 import org.graphiks.dawn4k.toolkit.surface.DawnSurfaceView
 import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
-import org.graphiks.hellodawn4k.CornellRenderer
+import org.graphiks.hellodawn4k.CornellHostState
 import org.graphiks.hellodawn4k.OrbitCamera
 import org.graphiks.hellodawn4k.RenderMode
-import org.graphiks.hellodawn4k.statusLines
-import kotlin.math.roundToInt
-import kotlin.time.Duration.Companion.milliseconds
+import org.graphiks.hellodawn4k.runCornellLoop
 
 /**
  * Android host over the shared Cornell renderer: the DawnSurfaceView supplies the
  * Vulkan-backed surface, one finger drags orbit the camera, a double tap toggles
  * rasterizer/raytracer. Lifecycle mirrors the toolkit's sample hosts.
  */
-class CornellActivity : Activity() {
+class CornellActivity : Activity(), CornellHostState {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val camera = OrbitCamera()
-    private var mode = RenderMode.RASTERIZER
-    private var cameraDirty = true
+    override val camera = OrbitCamera()
+    private var _mode = RenderMode.RASTERIZER
+    private var _cameraDirty = true
+    override val mode: RenderMode get() = _mode
+    override val cameraDirty: Boolean get() = _cameraDirty
+    override fun consumeCameraDirty() { _cameraDirty = false }
+    private fun dirtyCamera() { _cameraDirty = true }
     private lateinit var surface: DawnSurfaceView
     private lateinit var status: TextView
     private var rendering: Job? = null
@@ -45,6 +42,10 @@ class CornellActivity : Activity() {
     private var lastDownAt = 0L
     private var lastPointer: Pair<Float, Float>? = null
     private var lastPinchDistance: Float? = null
+
+    override suspend fun showStatus(text: String) {
+        withContext(Dispatchers.Main) { status.text = text }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,7 +77,7 @@ class CornellActivity : Activity() {
             lastPinchDistance = distance
             if (previous != null && previous > 1f) {
                 camera.zoomRatio((distance / previous).toDouble())
-                cameraDirty = true
+                dirtyCamera()
             }
             return true
         }
@@ -84,7 +85,7 @@ class CornellActivity : Activity() {
             MotionEvent.ACTION_DOWN -> {
                 val now = event.downTime
                 if (now - lastDownAt < 300) {
-                    mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+                    _mode = if (_mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
                 }
                 lastDownAt = now
                 lastPointer = event.x to event.y
@@ -94,7 +95,7 @@ class CornellActivity : Activity() {
                 lastPointer = event.x to event.y
                 if (previous != null) {
                     camera.drag((event.x - previous.first).toDouble(), (event.y - previous.second).toDouble())
-                    cameraDirty = true
+                    dirtyCamera()
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -134,35 +135,7 @@ class CornellActivity : Activity() {
         super.onDestroy()
     }
 
-    private suspend fun renderCornell(gpu: DawnSession, presentation: DawnPresentation) {
-        val renderer = CornellRenderer(gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format)
-        val timeSource = kotlin.time.TimeSource.Monotonic
-        var lastStatusAt = timeSource.markNow()
-        var emaFrameMs = 16.0
-        try {
-            while (currentCoroutineContext().isActive) {
-                if (cameraDirty) {
-                    cameraDirty = false
-                    renderer.updateCamera(camera.basis())
-                }
-                val frameStartedAt = timeSource.markNow()
-                presentation.withFrame { frame ->
-                    renderer.renderFrame(org.graphiks.hellodawn4k.Frame(frame.view, frame.extent.width, frame.extent.height), mode, camera)
-                    frame.present()
-                }
-                renderer.consumeResize()
-                emaFrameMs = emaFrameMs * 0.9 + (frameStartedAt.elapsedNow().inWholeNanoseconds / 1_000_000.0) * 0.1
-                if (timeSource.markNow() - lastStatusAt > 500.milliseconds) {
-                    lastStatusAt = timeSource.markNow()
-                    val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, mode, camera)
-                        .joinToString("\n")
-                    withContext(Dispatchers.Main) { status.text = text }
-                }
-                delay(16)
-            }
-        } finally {
-            renderer.close()
-            gpu.queue.onSubmittedWorkDone().getOrThrow()
-        }
+    private suspend fun renderCornell(gpu: org.graphiks.dawn4k.toolkit.DawnSession, presentation: org.graphiks.dawn4k.toolkit.surface.DawnPresentation) {
+        gpu.runCornellLoop(presentation, this)
     }
 }

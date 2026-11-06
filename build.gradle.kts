@@ -72,6 +72,16 @@ kotlin {
                 implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
             }
         }
+        // The Dawn-backed mobile hosts (Android + iOS) share the render loop here.
+        // It cannot live in commonMain: the web target has no dawn4k dependency.
+        val mobileMain by creating { dependsOn(commonMain) }
+        androidMain.dependsOn(mobileMain)
+        iosArm64Main.dependsOn(mobileMain)
+        iosSimulatorArm64Main.dependsOn(mobileMain)
+        mobileMain.dependencies {
+            implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
+            implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+        }
         val wasmJsMain by getting {
             dependencies {
                 // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
