@@ -5,3 +5,4 @@ cornell-window.png
 .idea/
 local.properties
 iosApp/CornellBox.xcodeproj/
+.openchamber/
