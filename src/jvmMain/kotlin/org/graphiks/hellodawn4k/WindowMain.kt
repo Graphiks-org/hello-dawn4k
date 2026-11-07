@@ -96,8 +96,8 @@ private suspend fun renderCornellFrames(
     val renderer = CornellRenderer(
         gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format,
     )
-    val hudText = HudText.open()
-    val hudRenderer = hudText?.let { HudRenderer(gpu, it) }
+    val hudText = DesktopHudFont.open()
+    val hudRenderer = hudText?.let { HudRenderer(gpu.device, gpu.queue, it) }
     val adapterName = gpu.adapter.info.description
     var mode = RenderMode.RASTERIZER
     var hudVertices = FloatArray(0)

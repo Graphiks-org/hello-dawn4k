@@ -41,17 +41,27 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
             }
         }
+        // The shared glyph chain (Kalligraphie shaping/layout/rasterization) lives here:
+        // every target except Android, whose Kalligraphie AARs currently share one
+        // namespace (AGP refuses the manifest merge) and whose host renders text natively.
+        val glyphMain by creating { dependsOn(commonMain) }
+        jvmMain.get().dependsOn(glyphMain)
+        iosArm64Main.get().dependsOn(glyphMain)
+        iosSimulatorArm64Main.get().dependsOn(glyphMain)
+        wasmJsMain.get().dependsOn(glyphMain)
+        glyphMain.dependencies {
+            api("org.graphiks:kalligraphie:1.0.0-SNAPSHOT")
+            // The kalligraphie umbrella POM declares these runtime-only; consumers redeclare them.
+            implementation("org.graphiks:api:1.0.0-SNAPSHOT")
+            implementation("org.graphiks:shaping:1.0.0-SNAPSHOT")
+            implementation("org.graphiks:layout:1.0.0-SNAPSHOT")
+            implementation("org.graphiks:raster-cpu:1.0.0-SNAPSHOT")
+        }
         val jvmMain by getting {
             dependencies {
                 implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
                 implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
                 implementation("org.graphiks:dawn4k-toolkit-glfw:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:kalligraphie:1.0.0-SNAPSHOT")
-                // The kalligraphie umbrella POM declares these runtime-only; the HUD needs them at compile time.
-                implementation("org.graphiks:api:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:shaping:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:layout:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:raster-cpu:1.0.0-SNAPSHOT")
             }
         }
         val androidMain by getting {

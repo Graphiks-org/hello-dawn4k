@@ -63,7 +63,9 @@ Dawn sans fenêtre, format RGBA8Unorm offscreen) sur des photons seedés :
 - couleurs structurelles : mur gauche rouge-dominant, mur droit vert-dominant ;
 - convergence : le bruit local (écart-type 3×3 sur le mur du fond) chute
   entre 1 et 30 frames — la régression historique d'accumulation gelée ;
-- le raytracer n'est pas noir (régression de l'uniform caméra jamais écrite).
+- le raytracer n'est pas noir (régression de l'uniform caméra jamais écrite) ;
+- la chaîne glyphe complète (fonte → shaping → rasterisation → atlas →
+  passe GPU alpha) laisse des pixels allumés sur une cible hors écran.
 
 Les assertions sont structurelles ou statistiques, donc portables entre GPU ;
 un hash d'or ne le serait pas (il varie avec le driver).
@@ -75,8 +77,9 @@ un hash d'or ne le serait pas (il varie avec le driver).
 | `src/commonMain/kotlin/…/Shaders.kt` | sources WGSL en constantes Kotlin (les frameworks natifs n'embarquent pas les ressources communes) |
 | `src/commonMain/kotlin/…/CornellRenderer.kt` | radiosity + rasterizer + raytracer + tonemap, partagé par tous les hôtes |
 | `src/commonMain/kotlin/…/CornellBox.kt`, `Camera.kt`, `Mat4.kt` | scène, caméra orbitale, perspectives/lookAt |
+| `src/glyphMain/kotlin/…/Hud.kt` | chaîne glyphe commune : shaping Kalligraphie, atlas R8 GPU, quads alpha (jvm + iOS + web ; Android rend son texte nativement et ses AAR Kalligraphie partagent un namespace) |
 | `src/jvmMain/kotlin/…/WindowMain.kt` | hôte desktop GLFW |
-| `src/jvmMain/kotlin/…/Hud.kt` | HUD desktop : layout Kalligraphie + atlas de glyphes GPU |
+| `src/jvmMain/kotlin/…/DesktopHudFont.kt` | capture de fonte desktop (extraction Liberation Sans + repli scan macOS) |
 | `src/mobileMain/kotlin/…/CornellLoop.kt` | boucle de rendu partagée Android/iOS (`CornellHostState`) |
 | `src/wasmJsMain/kotlin/…/WebMain.kt` | hôte web Kotlin/WasmJS pur |
 | `src/iosMain/kotlin/…/CornellViewController.kt` | hôte UIKit (DawnMetalView, toucher) |

@@ -1,16 +1,9 @@
 package org.graphiks.hellodawn4k
 
-import org.graphiks.dawn4k.DawnRenderPassEncoder
-import org.graphiks.dawn4k.toolkit.DawnSession
 import org.graphiks.kalligraphie.EditableLineFacadeRequest
 import org.graphiks.kalligraphie.EditableLineLayoutSession
-import org.graphiks.kalligraphie.FontDirectoryCatalog
-import org.graphiks.kalligraphie.FontDirectoryCatalogOptions
 import org.graphiks.kalligraphie.Kalligraphie
-import org.graphiks.kalligraphie.MacosSystemFontCatalog
-import org.graphiks.kalligraphie.MacosSystemFontCatalogOptions
 import org.graphiks.kalligraphie.api.BaseDirection
-import org.graphiks.kalligraphie.api.EditableLine
 import org.graphiks.kalligraphie.api.EditableLineMaterialization
 import org.graphiks.kalligraphie.api.EditableLineResult
 import org.graphiks.kalligraphie.api.FontAccessRequirementsSnapshot
@@ -19,11 +12,9 @@ import org.graphiks.kalligraphie.api.FontGlyphRequest
 import org.graphiks.kalligraphie.api.FontInstance
 import org.graphiks.kalligraphie.api.FontInstanceDescriptor
 import org.graphiks.kalligraphie.api.FontOperationResult
-import org.graphiks.kalligraphie.api.FontRenderAssetHandle
 import org.graphiks.kalligraphie.api.FontRenderVariantSnapshot
 import org.graphiks.kalligraphie.api.GlyphOutlineIR
 import org.graphiks.kalligraphie.api.GlyphRepresentation
-import org.graphiks.kalligraphie.api.LayoutHandle
 import org.graphiks.kalligraphie.api.LayoutUnit
 import org.graphiks.kalligraphie.api.LineVerticalMetrics
 import org.graphiks.kalligraphie.api.OutlineProfile
@@ -40,7 +31,10 @@ import org.graphiks.webgpu.GPUAddressMode
 import org.graphiks.webgpu.GPUBlendFactor
 import org.graphiks.webgpu.GPUBlendOperation
 import org.graphiks.webgpu.GPUBufferUsage
+import org.graphiks.webgpu.GPUDevice
 import org.graphiks.webgpu.GPUFilterMode
+import org.graphiks.webgpu.GPUQueue
+import org.graphiks.webgpu.GPURenderPassEncoder
 import org.graphiks.webgpu.GPUTextureFormat
 import org.graphiks.webgpu.GPUTextureUsage
 import org.graphiks.webgpu.descriptors.BindGroupDescriptor
@@ -59,13 +53,22 @@ import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
 import org.graphiks.webgpu.descriptors.TextureDescriptor
 import org.graphiks.webgpu.descriptors.VertexState
 
+/**
+ * The shared glyph chain: Kalligraphie shapes single lines into positioned glyph outlines,
+ * a CPU rasterizer turns outlines into 8-bit coverage, and a GPU atlas serves them as
+ * alpha-blended quads over the presented scene. Common to every host that draws its own
+ * text (the desktop today); hosts that get text for free from the platform (DOM text,
+ * TextView, UILabel) keep their native overlays and only share the status content
+ * ([statusLines]).
+ */
+
 /** One placed glyph: pen origin relative to the line baseline (pixels, y-down) plus its outline. */
 class HudGlyph(val glyphId: Int, val penX: Float, val penY: Float, val outline: GlyphOutlineIR)
 
 /**
- * CPU side of the HUD: shapes single lines through Kalligraphie's editable-line facade
- * against Menlo from the macOS system catalog and returns per-glyph outlines ready for
- * rasterization. Refusals come back as empty lines so the window keeps running without text.
+ * CPU side of the glyph chain: shapes single lines through Kalligraphie's editable-line
+ * facade and returns per-glyph outlines ready for rasterization. Refusals come back as
+ * empty lines so the caller keeps running without text.
  */
 class HudText private constructor(
     private val fontPx: Float,
@@ -73,13 +76,11 @@ class HudText private constructor(
     private val resolver: FontAssetResolverHandle,
     private val session: EditableLineLayoutSession,
     private val requirements: FontAccessRequirementsSnapshot,
-    private val tempRoot: java.nio.file.Path?,
 ) : AutoCloseable {
 
     override fun close() {
         session.close()
         resolver.close()
-        tempRoot?.toFile()?.deleteRecursively()
     }
 
     fun layoutLine(text: String): List<HudGlyph> {
@@ -128,13 +129,17 @@ class HudText private constructor(
 
     companion object {
         /**
-         * Opens Menlo Regular deterministically: the default system catalog caps acceptance at
-         * 32 faces in filesystem enumeration order, so a full-directory scan finds Menlo only
-         * intermittently. Copying Menlo.ttc into its own temporary root (the same route the
-         * library's own journey tests use) makes the capture exact; a limits-raised system scan
-         * remains as fallback. Prints why the HUD disabled itself on failure.
+         * Opens the first Regular face of [families] present in an already-opened catalog —
+         * directory catalogs, platform system scans, anything Kalligraphie can enumerate.
+         * Opening the catalog itself is host business (filesystem scanning is not a common
+         * concept); returns null (and reports why) when nothing matches, so the caller can
+         * disable text rather than crash.
          */
-        fun open(fontPx: Float = 18f): HudText? {
+        fun openFromCatalog(
+            catalog: org.graphiks.kalligraphie.api.FontCatalogSnapshot,
+            families: List<String>,
+            fontPx: Float = 18f,
+        ): HudText? {
             val requirements = FontAccessRequirementsSnapshot.renderable(
                 OutlineProfile(
                     maxBytes = 1_000_000,
@@ -144,103 +149,65 @@ class HudText private constructor(
                     maxCompositeComponents = 16_384,
                 ),
             )
-            val failures = ArrayList<String>()
-            for (attempt in captureAttempts()) {
-                val opened = attempt.open()
-                val catalog = (opened as? FontOperationResult.Success)?.value
-                if (catalog == null) {
-                    failures += "catalog refused (${attempt.label}): $opened"
-                    attempt.tempDir?.toFile()?.deleteRecursively()
-                    continue
+            val record = catalog.faces.firstOrNull { face ->
+                families.any { family ->
+                    face.metadata.familyName == family && face.metadata.styleName == "Regular"
                 }
-                val record = catalog.faces.firstOrNull { face ->
-                    attempt.families.any { family ->
-                        face.metadata.familyName == family && face.metadata.styleName == "Regular"
-                    }
-                } ?: catalog.faces.firstOrNull { face -> attempt.families.contains(face.metadata.familyName) }
-                if (record == null) {
-                    val families = catalog.faces.take(6).joinToString { it.metadata.familyName }
-                    failures += "font absent (${attempt.label}, ${catalog.faces.size} faces: $families…)"
-                    attempt.tempDir?.toFile()?.deleteRecursively()
-                    continue
-                }
-                val hud = openFrom(catalog, record, requirements, fontPx, attempt.tempDir)
-                if (hud == null) {
-                    failures += "face/instance/session refused (${attempt.label})"
-                }
-                return hud
+            } ?: catalog.faces.firstOrNull { face -> families.contains(face.metadata.familyName) }
+            if (record == null) {
+                val seen = catalog.faces.take(6).joinToString { it.metadata.familyName }
+                println("hud disabled: font absent (${catalog.faces.size} faces: $seen…)")
+                return null
             }
-            println("hud disabled: ${failures.joinToString("; ")}")
-            return null
-        }
-
-        private class CaptureAttempt(
-            val label: String,
-            val families: List<String>,
-            val tempDir: java.nio.file.Path?,
-            val open: () -> FontOperationResult<org.graphiks.kalligraphie.api.FontCatalogSnapshot>,
-        )
-
-        /**
-         * Liberation Sans ships in the resources (OFL-1.1, the font Kalligraphie's own benches
-         * exercise most) and is extracted to a private directory — deterministic on every JVM.
-         * The macOS system scan stays as a fallback: its default caps accept only 32 faces in
-         * enumeration order, and on recent macOS the SFNT name tables of system fonts such as
-         * Menlo are rejected, so raised limits are passed but success is not guaranteed.
-         */
-        private fun captureAttempts(): List<CaptureAttempt> {
-            val attempts = ArrayList<CaptureAttempt>()
-            runCatching {
-                val resource = requireNotNull(javaClass.getResourceAsStream("/fonts/LiberationSans-Regular.ttf")) {
-                    "bundled font missing"
-                }
-                val dir = java.nio.file.Files.createTempDirectory("hellodawn4k-font")
-                java.nio.file.Files.copy(resource, dir.resolve("LiberationSans-Regular.ttf"))
-                attempts.add(
-                    CaptureAttempt(
-                        label = "bundled Liberation Sans",
-                        families = listOf("Liberation Sans"),
-                        tempDir = dir,
-                        open = {
-                            FontDirectoryCatalog.open(FontDirectoryCatalogOptions(roots = listOf(dir.toString())))
-                        },
-                    ),
-                )
-            }
-            val raisedLimits = MacosSystemFontCatalogOptions(
-                maxPathsToVisit = 2048,
-                maxFaces = 512,
-                maxFacesToExamine = 2048,
-                maxTotalSourceBytes = 512 * 1024 * 1024,
-            )
-            attempts.add(
-                CaptureAttempt(
-                    label = "macOS system font scan",
-                    families = listOf("Menlo", "Monaco", "Courier New"),
-                    tempDir = null,
-                    open = { MacosSystemFontCatalog.open(raisedLimits) },
-                ),
-            )
-            return attempts
-        }
-
-        private fun openFrom(
-            catalog: org.graphiks.kalligraphie.api.FontCatalogSnapshot,
-            record: org.graphiks.kalligraphie.api.FontFaceRecord,
-            requirements: FontAccessRequirementsSnapshot,
-            fontPx: Float,
-            tempRoot: java.nio.file.Path?,
-        ): HudText? {
             val resolver = catalog.openAssetResolver().valueOrNull() ?: return null
             val resolved = catalog.resolveFace(record.id, requirements).valueOrNull() ?: return null
             val font = resolved.instantiate(FontInstanceDescriptor(LayoutUnit(fontPx))).valueOrNull() ?: return null
             val session = EditableLineLayoutSession.open().valueOrNull() ?: return null
-            return HudText(fontPx, font, resolver, session, requirements, tempRoot)
+            return HudText(fontPx, font, resolver, session, requirements)
         }
 
         private fun <T> FontOperationResult<T>.valueOrNull(): T? = (this as? FontOperationResult.Success<T>)?.value
     }
 }
+
+/** HUD text pass: coverage glyphs from a Kalligraphie-rasterized atlas, tinted
+ *  and alpha-blended over the presented scene. Vertices arrive through a storage
+ *  buffer (x_px, y_px, u, v) so no vertex-buffer plumbing is needed. */
+private const val HUD_WGSL: String = """
+struct HudUniforms {
+    viewport: vec4f, // xy: framebuffer extent in pixels
+    color: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: HudUniforms;
+@group(0) @binding(1) var atlasSampler: sampler;
+@group(0) @binding(2) var atlas: texture_2d<f32>;
+@group(0) @binding(3) var<storage, read> vertices: array<vec4f>;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> VertexOutput {
+    let glyph = vertices[index];
+    var output: VertexOutput;
+    let ndc = vec2f(
+        glyph.x / uniforms.viewport.x * 2.0 - 1.0,
+        1.0 - glyph.y / uniforms.viewport.y * 2.0,
+    );
+    output.position = vec4f(ndc, 0.0, 1.0);
+    output.uv = glyph.zw;
+    return output;
+}
+
+@fragment
+fn fs(input: VertexOutput) -> @location(0) vec4f {
+    let coverage = textureSample(atlas, atlasSampler, input.uv).r;
+    return vec4f(uniforms.color.rgb, uniforms.color.a * coverage);
+}
+"""
 
 /** Pipeline plus its bind group for one target format; the HUD draws into several. */
 private class HudPass(
@@ -250,11 +217,15 @@ private class HudPass(
 )
 
 /**
- * GPU side of the HUD: a lazily filled R8 coverage atlas (rewritten whole on growth;
+ * GPU side of the glyph chain: a lazily filled R8 coverage atlas (rewritten whole on growth;
  * 512-wide rows keep bytesPerRow a multiple of 256) and one alpha-blended quad draw
  * per glyph through a storage-buffer vertex stream.
  */
-class HudRenderer(private val session: DawnSession, private val text: HudText) : AutoCloseable {
+class HudRenderer(
+    private val device: GPUDevice,
+    private val queue: GPUQueue,
+    private val text: HudText,
+) : AutoCloseable {
     private var closed = false
     private val atlasWidth = 512u
     private val atlasHeight = 192u
@@ -268,7 +239,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
 
     private class Placement(val u: Float, val v: Float, val w: Float, val h: Float, val left: Int, val top: Int)
 
-    private val atlas = session.device.createTexture(
+    private val atlas = device.createTexture(
         TextureDescriptor(
             size = Extent3D(atlasWidth, atlasHeight),
             format = GPUTextureFormat.R8Unorm,
@@ -276,27 +247,23 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
         ),
     )
     private val atlasView = atlas.createView()
-    private val sampler = session.device.createSampler(SamplerDescriptor(
+    private val sampler = device.createSampler(SamplerDescriptor(
         magFilter = GPUFilterMode.Linear,
         minFilter = GPUFilterMode.Linear,
         addressModeU = GPUAddressMode.ClampToEdge,
         addressModeV = GPUAddressMode.ClampToEdge,
     ))
-    private val uniforms = session.device.createBuffer(
+    private val uniforms = device.createBuffer(
         BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    private val vertices = session.device.createBuffer(
+    private val vertices = device.createBuffer(
         BufferDescriptor(512uL * 24uL * 4uL, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst), // 512 glyphs
     )
-    private val shader = session.device.createShaderModule(
-        ShaderModuleDescriptor(
-            requireNotNull(javaClass.getResourceAsStream("/hud.wgsl")) { "missing hud.wgsl" }.readBytes().decodeToString(),
-        ),
-    )
+    private val shader = device.createShaderModule(ShaderModuleDescriptor(HUD_WGSL))
 
     /** Uploads the quad stream (6 vertices × x,y,u,v per glyph) and draws it blended over the scene. */
     fun draw(
-        pass: org.graphiks.webgpu.GPURenderPassEncoder,
+        pass: GPURenderPassEncoder,
         format: GPUTextureFormat,
         extentWidth: Int,
         extentHeight: Int,
@@ -304,8 +271,8 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
     ) {
         if (floats.isEmpty()) return
         flushAtlas()
-        session.queue.writeBuffer(vertices, 0uL, ArrayBuffer.of(floats))
-        session.queue.writeBuffer(uniforms, 0uL, ArrayBuffer.of(floatArrayOf(
+        queue.writeBuffer(vertices, 0uL, ArrayBuffer.of(floats))
+        queue.writeBuffer(uniforms, 0uL, ArrayBuffer.of(floatArrayOf(
             extentWidth.toFloat(), extentHeight.toFloat(), 0f, 0f,
             1.0f, 1.0f, 1.0f, 0.85f,
         )))
@@ -323,14 +290,6 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
      * and packed first.
      */
     fun buildVertices(lines: List<List<HudGlyph>>, baseX: Float, baseY: Float, lineHeight: Float): FloatArray {
-        if (System.getenv("CORNELL_HUD_DEBUG") != null) {
-            for ((index, line) in lines.withIndex()) {
-                for (glyph in line) {
-                    val image = text.rasterize(glyph.outline) ?: continue
-                    println("huddbg line=$index glyph=${glyph.glyphId} penX=${glyph.penX} penY=${glyph.penY} left=${image.left} top=${image.top} w=${image.width} h=${image.height}")
-                }
-            }
-        }
         val out = ArrayList<Float>(lines.sumOf { it.size } * 24)
         lines.forEachIndexed { index, line ->
             val baseline = baseY + index * lineHeight
@@ -397,7 +356,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
     private fun flushAtlas() {
         if (!atlasDirty) return
         atlasDirty = false
-        session.queue.writeTexture(
+        queue.writeTexture(
             TexelCopyTextureInfo(atlas),
             ArrayBuffer.of(atlasBytes),
             TexelCopyBufferLayout(bytesPerRow = atlasWidth),
@@ -406,7 +365,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
     }
 
     private fun createPass(format: GPUTextureFormat): HudPass {
-        val pipeline = session.device.createRenderPipeline(
+        val pipeline = device.createRenderPipeline(
             RenderPipelineDescriptor(
                 vertex = VertexState(module = shader, entryPoint = "vs"),
                 fragment = FragmentState(
@@ -433,7 +392,7 @@ class HudRenderer(private val session: DawnSession, private val text: HudText) :
             ),
         )
         val layout = pipeline.getBindGroupLayout(0u)
-        val binding = session.device.createBindGroup(
+        val binding = device.createBindGroup(
             BindGroupDescriptor(
                 layout,
                 listOf(
