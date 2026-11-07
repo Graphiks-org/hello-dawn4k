@@ -96,7 +96,7 @@ private suspend fun renderCornellFrames(
     val renderer = CornellRenderer(
         gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format,
     )
-    val hudText = DesktopHudFont.open()
+    val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
     val hudRenderer = hudText?.let { HudRenderer(gpu.device, gpu.queue, it) }
     val adapterName = gpu.adapter.info.description
     var mode = RenderMode.RASTERIZER
@@ -121,7 +121,7 @@ private suspend fun renderCornellFrames(
             val frameStartedAt = System.nanoTime()
             if (presentation.withFrame { frame ->
                     renderer.renderFrame(frame.toFrame(), mode, controls.camera) { encoder, frame ->
-                        drawHud(encoder, frame, hudRenderer, hudVertices, renderer.format)
+                        hudRenderer?.drawOver(encoder, frame, renderer.format, hudVertices)
                     }
                     frame.present()
                 }) {
@@ -156,26 +156,3 @@ private suspend fun renderCornellFrames(
 
 private fun org.graphiks.dawn4k.toolkit.surface.DawnFrame.toFrame() =
     org.graphiks.hellodawn4k.Frame(view, extent.width, extent.height)
-
-private fun drawHud(
-    encoder: org.graphiks.webgpu.GPUCommandEncoder,
-    frame: Frame,
-    hud: HudRenderer?,
-    hudVertices: FloatArray,
-    format: org.graphiks.webgpu.GPUTextureFormat,
-) {
-    if (hud == null || hudVertices.isEmpty()) return
-    val pass = encoder.beginRenderPass(org.graphiks.webgpu.descriptors.RenderPassDescriptor(colorAttachments = listOf(
-        org.graphiks.webgpu.descriptors.RenderPassColorAttachment(
-            frame.view,
-            loadOp = org.graphiks.webgpu.GPULoadOp.Load,
-            storeOp = org.graphiks.webgpu.GPUStoreOp.Store,
-            clearValue = org.graphiks.webgpu.descriptors.Color(0.0, 0.0, 0.0, 1.0),
-        ),
-    )))
-    try {
-        hud.draw(pass, format, frame.width, frame.height, hudVertices)
-    } finally {
-        pass.end()
-    }
-}

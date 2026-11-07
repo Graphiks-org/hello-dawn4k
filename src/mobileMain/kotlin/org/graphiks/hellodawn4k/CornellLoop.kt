@@ -22,11 +22,27 @@ interface CornellHostState {
 }
 
 /**
+ * A Kalligraphie-drawn status overlay a host can attach to the shared loop: [update]
+ * receives the status text at the loop's 2 Hz refresh cadence, [draw] is invoked as the
+ * render frame's extra pass, right over the presented texture. Hosts that show status
+ * natively (Android's TextView, while Kalligraphie's Android AARs share one namespace)
+ * pass no overlay and keep [CornellHostState.showStatus].
+ */
+interface CornellOverlay {
+    fun update(text: String)
+    fun draw(encoder: org.graphiks.webgpu.GPUCommandEncoder, frame: Frame)
+}
+
+/**
  * The Android/iOS render loop over the shared Cornell renderer: drains the camera
  * flag, renders and presents one Dawn frame at a time, tracks an EMA of the frame
- * time and refreshes the host's status text at 2 Hz, then drains the GPU on exit.
+ * time and refreshes the host's status at 2 Hz, then drains the GPU on exit.
  */
-suspend fun DawnSession.runCornellLoop(presentation: DawnPresentation, state: CornellHostState) {
+suspend fun DawnSession.runCornellLoop(
+    presentation: DawnPresentation,
+    state: CornellHostState,
+    overlay: CornellOverlay? = null,
+) {
     val renderer = CornellRenderer(device, queue, checkNotNull(presentation.configuration.value).format)
     val timeSource = kotlin.time.TimeSource.Monotonic
     var lastStatusAt = timeSource.markNow()
@@ -45,16 +61,19 @@ suspend fun DawnSession.runCornellLoop(presentation: DawnPresentation, state: Co
                 renderer.updateCamera(state.camera.basis())
             }
             presentation.withFrame { frame ->
-                renderer.renderFrame(Frame(frame.view, frame.extent.width, frame.extent.height), state.mode, state.camera)
+                renderer.renderFrame(
+                    Frame(frame.view, frame.extent.width, frame.extent.height),
+                    state.mode, state.camera,
+                ) { encoder, rendered -> overlay?.draw(encoder, rendered) }
                 frame.present()
             }
             renderer.consumeResize()
             if (timeSource.markNow() - lastStatusAt > 500.milliseconds) {
                 lastStatusAt = timeSource.markNow()
-                state.showStatus(
-                    statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, state.mode, state.camera)
-                        .joinToString("\n")
-                )
+                val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, state.mode, state.camera)
+                    .joinToString("\n")
+                state.showStatus(text)
+                overlay?.update(text)
             }
             delay(16)
         }

@@ -47,12 +47,16 @@ anti-overflow du sample, seeds CPU fraîches par frame).
 - **raytracer** — un rayon primaire par pixel sur la même lightmap, à la
   résolution physique de la fenêtre.
 
-Un **HUD** en haut à gauche affiche mode, framerate, photons accumulés, état
-de la caméra et adaptateur GPU : le texte est mis en page par
+Le **statut** (mode, framerate, photons accumulés, caméra, adaptateur GPU) est
+partout dessiné par la **chaîne glyphe commune** :
 [Kalligraphie](https://github.com/Graphiks-org/Kalligraphie) (facade
-`EditableLineLayoutSession` + shaping HarfBuzz), rastérisé en coverage A8 sur
-CPU à partir d'une Liberation Sans embarquée, servi dans un atlas R8 et
-dessiné en quads alpha-blendés.
+`EditableLineLayoutSession` + shaping HarfBuzz) shape les lignes, une
+rastérisation CPU A8 alimente un atlas R8, et des quads alpha-blendés
+tracent le texte sur la scène — Liberation Sans embarquée en octets
+(Base64, comme les WGSL). Exception Android : les AAR Kalligraphie
+partagent actuellement un même namespace (`io.ygdrasil.shared`, AGP
+refuse la fusion du manifeste), l'hôte Android garde donc son
+`TextView` en attendant le correctif amont.
 
 ## Tests
 

@@ -21,17 +21,17 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Exercises the whole shared glyph chain headlessly: desktop font capture (JVM extraction
- * of the bundled Liberation Sans through Kalligraphie), shaping, CPU rasterization, the
- * R8 atlas, the alpha-blended GPU pass and the readback — text drawn over a cleared
- * target must leave lit pixels.
+ * Exercises the whole shared glyph chain headlessly from the embedded font bytes — the
+ * exact path every Kalligraphie target takes: in-memory catalog, shaping, CPU
+ * rasterization, the R8 atlas, the alpha-blended GPU pass and the readback. Text drawn
+ * over a cleared target must leave lit pixels.
  */
 class GlyphChainTest {
     @Test
     fun shapedTextRasterizesAndBlendsOverTheTarget() = runBlocking {
         withDawnSession(DawnSessionOptions(startupTimeout = 60.seconds)) { session ->
-            val hudText = DesktopHudFont.open()
-            assertTrue(hudText != null, "desktop font capture should succeed")
+            val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
+            assertTrue(hudText != null, "embedded font catalog should open")
             hudText!!.use { text ->
                 val lines = listOf(
                     text.layoutLine("60 fps · 0M photons · rasterizer"),

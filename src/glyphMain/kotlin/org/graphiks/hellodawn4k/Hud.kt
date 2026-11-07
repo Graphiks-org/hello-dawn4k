@@ -13,6 +13,7 @@ import org.graphiks.kalligraphie.api.FontInstance
 import org.graphiks.kalligraphie.api.FontInstanceDescriptor
 import org.graphiks.kalligraphie.api.FontOperationResult
 import org.graphiks.kalligraphie.api.FontRenderVariantSnapshot
+import org.graphiks.kalligraphie.api.FontSourceProvenance
 import org.graphiks.kalligraphie.api.GlyphOutlineIR
 import org.graphiks.kalligraphie.api.GlyphRepresentation
 import org.graphiks.kalligraphie.api.LayoutUnit
@@ -128,6 +129,24 @@ class HudText private constructor(
     }
 
     companion object {
+        /**
+         * Opens the shared glyph chain straight from raw TTF bytes (an embedded font): no
+         * filesystem, no platform catalog — the one path every Kalligraphie target can take.
+         */
+        fun openEmbedded(
+            sourceBytes: ByteArray,
+            family: String = "Liberation Sans",
+            fontPx: Float = 18f,
+        ): HudText? {
+            val opened = Kalligraphie.embedded(sourceBytes, FontSourceProvenance(family))
+            val catalog = (opened as? FontOperationResult.Success)?.value
+                ?: run {
+                    println("hud disabled: embedded catalog refused ($opened)")
+                    return null
+                }
+            return openFromCatalog(catalog, listOf(family), fontPx)
+        }
+
         /**
          * Opens the first Regular face of [families] present in an already-opened catalog —
          * directory catalogs, platform system scans, anything Kalligraphie can enumerate.
@@ -282,6 +301,34 @@ class HudRenderer(
         pass.setPipeline(hudPass.pipeline)
         pass.setBindGroup(0u, hudPass.binding)
         pass.draw((floats.size / 4).toUInt())
+    }
+
+    /**
+     * Host convenience: draws the current quad stream over [frame]'s presented texture —
+     * one extra load-pass after the scene, the pattern every Kalligraphie host shares.
+     */
+    fun drawOver(
+        encoder: org.graphiks.webgpu.GPUCommandEncoder,
+        frame: Frame,
+        format: GPUTextureFormat,
+        floats: FloatArray,
+    ) {
+        if (floats.isEmpty()) return
+        val pass = encoder.beginRenderPass(
+            org.graphiks.webgpu.descriptors.RenderPassDescriptor(colorAttachments = listOf(
+                org.graphiks.webgpu.descriptors.RenderPassColorAttachment(
+                    frame.view,
+                    loadOp = org.graphiks.webgpu.GPULoadOp.Load,
+                    storeOp = org.graphiks.webgpu.GPUStoreOp.Store,
+                    clearValue = org.graphiks.webgpu.descriptors.Color(0.0, 0.0, 0.0, 1.0),
+                ),
+            )),
+        )
+        try {
+            draw(pass, format, frame.width, frame.height, floats)
+        } finally {
+            pass.end()
+        }
     }
 
     /**

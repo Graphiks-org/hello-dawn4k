@@ -120,9 +120,25 @@ tasks.register<JavaExec>("runWindow") {
     mainClass.set("org.graphiks.hellodawn4k.WindowMainKt")
     classpath = kotlin.targets["jvm"].compilations["main"].output.allOutputs + configurations["jvmRuntimeClasspath"]
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
-    // Desktop entry point: ./gradlew runWindow
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     if (System.getProperty("os.name").lowercase().contains("mac")) {
         jvmArgs("-XstartOnFirstThread")
     }
+}
+
+// Kalligraphie's wasm-js HarfBuzz bridge: the klib ships its JS loaders
+// (kffi-harfbuzz-web.mjs, hb.mjs) at the klib root, but the Kotlin webpack packaging
+// does not extract klib-root .mjs files, so the bundle cannot resolve them. Extract
+// them next to the generated package before webpack runs (both variants).
+val kffiHarfbuzzKlib = configurations.detachedConfiguration(
+    dependencies.create("org.graphiks:kffi-harfbuzz-wasm-js:1.0.0-SNAPSHOT"),
+)
+val extractKffiHarfbuzzGlue by tasks.registering(Copy::class) {
+    val klibFile = provider { kffiHarfbuzzKlib.files.first { it.name.endsWith(".klib") } }
+    from(zipTree(klibFile))
+    include("*.mjs")
+    into(layout.buildDirectory.dir("wasm/packages/${project.name}/kotlin"))
+}
+listOf("wasmJsBrowserDevelopmentWebpack", "wasmJsBrowserProductionWebpack").forEach { name ->
+    tasks.matching { it.name == name }.configureEach { dependsOn(extractKffiHarfbuzzGlue) }
 }

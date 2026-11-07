@@ -47,8 +47,16 @@ fun main() {
         surface.configure(SurfaceConfiguration(device = device, format = format))
 
         val renderer = CornellRenderer(device, device.queue, format)
-        val hud = document.getElementById("hud") as? HTMLDivElement ?: return@launch
         val modeButton = document.getElementById("mode") as? HTMLButtonElement ?: return@launch
+
+        // The status overlay is drawn by the shared Kalligraphie glyph chain, like every
+        // other target; the DOM keeps only controls (the mode button) and the fallback card.
+        // On web the HarfBuzz wasm module instantiates asynchronously: await the runtime
+        // before opening any facade (a no-op on JVM and iOS).
+        org.graphiks.kalligraphie.initialize()
+        val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
+        val hudRenderer = hudText?.let { HudRenderer(device, device.queue, it) }
+        var hudVertices = FloatArray(0)
 
         fun toggleMode() {
             mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
@@ -101,7 +109,9 @@ fun main() {
             renderer.updateCamera(camera.basis())
             val texture = surface.getCurrentTexture()
             val view: GPUTextureView = texture.texture.createView()
-            renderer.renderFrame(Frame(view, width, height), mode, camera)
+            renderer.renderFrame(Frame(view, width, height), mode, camera) { encoder, frame ->
+                hudRenderer?.drawOver(encoder, frame, format, hudVertices)
+            }
             renderer.consumeResize()
 
             val now = window.performance.now()
@@ -111,8 +121,13 @@ fun main() {
             lastFrameAt = now
             if (now - lastStatusAt > 500 || lastStatusAt < 0.0) {
                 lastStatusAt = now
-                hud.textContent = statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
-                    .joinToString("\n")
+                hudRenderer?.let { hud ->
+                    hudVertices = hud.buildVertices(
+                        statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
+                            .map { line -> hudText!!.layoutLine(line) },
+                        baseX = 14f, baseY = 30f, lineHeight = 26f,
+                    )
+                }
             }
             window.requestAnimationFrame { tick() }
         }
@@ -126,7 +141,6 @@ private fun fatal(message: String): Nothing {
     fallback.hidden = false
     fallback.textContent = message
     (document.getElementById("canvas") as? org.w3c.dom.HTMLElement)?.let { it.style.display = "none" }
-    (document.getElementById("hud") as? org.w3c.dom.HTMLElement)?.let { it.style.display = "none" }
     (document.getElementById("mode") as? org.w3c.dom.HTMLElement)?.let { it.style.display = "none" }
     throw IllegalStateException(message)
 }

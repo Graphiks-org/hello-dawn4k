@@ -9,16 +9,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.graphiks.dawn4k.toolkit.surface.DawnMetalView
 import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
 import platform.CoreGraphics.CGRectMake
-import platform.UIKit.UIColor
 import platform.UIKit.UIEvent
-import platform.UIKit.UILabel
 import platform.UIKit.UITouch
 import platform.UIKit.UIViewController
-import platform.UIKit.addSubview
 
 /**
  * iOS host over the shared Cornell renderer: UIKit owns the DawnMetalView (Metal-backed),
@@ -40,8 +36,12 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     private var lastPointer: Pair<Double, Double>? = null
     private var lastPinchDistance: Double? = null
 
+    // The Kalligraphie overlay replaces the native status label: showStatus only
+    // hands the text to the overlay renderer owned by the render job.
+    private var overlayText: ((String) -> Unit)? = null
+
     override suspend fun showStatus(text: String) {
-        withContext(Dispatchers.Main) { status.text = text }
+        overlayText?.invoke(text)
     }
 
     private fun pinchDistance(touches: Set<*>): Double? {
@@ -54,24 +54,10 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         return kotlin.math.sqrt(dx * dx + dy * dy)
     }
     private lateinit var metal: DawnMetalView
-    private lateinit var status: UILabel
 
     override fun loadView() {
         metal = DawnMetalView(CGRectMake(0.0, 0.0, 640.0, 480.0))
         view = metal
-        status = UILabel(CGRectMake(24.0, 50.0, 1100.0, 80.0)).apply {
-            text = "Starting…"
-            numberOfLines = 0
-            textColor = UIColor.whiteColor
-        }
-        metal.addSubview(status)
-    }
-
-    override fun viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        status.setFrame(
-            CGRectMake(24.0, 50.0, (metal.bounds.useContents { size.width } - 48.0).coerceAtLeast(0.0), 100.0),
-        )
     }
 
     override fun touchesBegan(touches: Set<*>, withEvent: UIEvent?) {
@@ -125,14 +111,33 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
     override fun viewDidAppear(animated: Boolean) {
         super.viewDidAppear(animated)
         if (rendering != null) return
-        status.text = "Starting…"
         val previousCleanup = cleanup
         rendering = scope.launch {
             previousCleanup?.join()
             val target = metal.target
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
-                gpu.runCornellLoop(presentation, this@CornellViewController)
+                val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
+                val hudRenderer = hudText?.let { HudRenderer(gpu.device, gpu.queue, it) }
+                var hudVertices = FloatArray(0)
+                overlayText = { text ->
+                    hudRenderer?.let { hud ->
+                        hudVertices = hud.buildVertices(
+                            text.lines().map { line -> hudText!!.layoutLine(line) },
+                            baseX = 24f, baseY = 60f, lineHeight = 30f,
+                        )
+                    }
+                }
+                try {
+                    val format = checkNotNull(presentation.configuration.value).format
+                    gpu.runCornellLoop(presentation, this@CornellViewController) { encoder, frame ->
+                        hudRenderer?.drawOver(encoder, frame, format, hudVertices)
+                    }
+                } finally {
+                    overlayText = null
+                    hudRenderer?.close()
+                    hudText?.close()
+                }
             }
         }
     }
