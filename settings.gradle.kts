@@ -29,7 +29,7 @@ dependencyResolutionManagement {
         }
         maven("https://central.sonatype.com/repository/maven-snapshots/") {
             name = "GraphiksSnapshots"
-            content { includeGroup("org.graphiks") }
+            content { includeGroup("org.graphiks"); includeGroup("org.graphiks.kalligraphie") }
         }
     }
 }

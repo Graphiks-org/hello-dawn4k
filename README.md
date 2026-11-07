@@ -53,10 +53,10 @@ partout dessiné par la **chaîne glyphe commune** :
 `EditableLineLayoutSession` + shaping HarfBuzz) shape les lignes, une
 rastérisation CPU A8 alimente un atlas R8, et des quads alpha-blendés
 tracent le texte sur la scène — Liberation Sans embarquée en octets
-(Base64, comme les WGSL). Exception Android : les AAR Kalligraphie
-partagent actuellement un même namespace (`io.ygdrasil.shared`, AGP
-refuse la fusion du manifeste), l'hôte Android garde donc son
-`TextView` en attendant le correctif amont.
+(Base64, comme les WGSL). Exception Android : le module `raster-cpu`
+publie encore un namespace à tiret (`org.graphiks.kalligraphie.raster-cpu`,
+identifiant Java invalide) qu'AGP refuse ; l'hôte Android garde donc son
+`TextView` en attendant la republication de ce seul module.
 
 ## Tests
 

@@ -24,7 +24,8 @@ import org.graphiks.hellodawn4k.runCornellLoop
 /**
  * Android host over the shared Cornell renderer: the DawnSurfaceView supplies the
  * Vulkan-backed surface, one finger drags orbit the camera, a double tap toggles
- * rasterizer/raytracer. Lifecycle mirrors the toolkit's sample hosts.
+ * rasterizer/raytracer. The status overlay is the shared Kalligraphie glyph chain,
+ * like every other target. Lifecycle mirrors the toolkit's sample hosts.
  */
 class CornellActivity : Activity(), CornellHostState {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -36,12 +37,17 @@ class CornellActivity : Activity(), CornellHostState {
     override fun consumeCameraDirty() { _cameraDirty = false }
     private fun dirtyCamera() { _cameraDirty = true }
     private lateinit var surface: DawnSurfaceView
-    private lateinit var status: TextView
     private var rendering: Job? = null
     private var cleanup: Job? = null
     private var lastDownAt = 0L
     private var lastPointer: Pair<Float, Float>? = null
     private var lastPinchDistance: Float? = null
+
+    // Temporary native status: the shared glyph chain (GlyphOverlay) reaches Android the
+    // day Kalligraphie republishes raster-cpu with a valid AGP namespace — its current
+    // 'org.graphiks.kalligraphie.raster-cpu' is not a valid Java package and AGP refuses
+    // the AAR transform. Every other target already draws the overlay through Kalligraphie.
+    private lateinit var status: TextView
 
     override suspend fun showStatus(text: String) {
         withContext(Dispatchers.Main) { status.text = text }
@@ -115,7 +121,7 @@ class CornellActivity : Activity(), CornellHostState {
             val target = surface.target
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
-                renderCornell(gpu, presentation)
+                gpu.runCornellLoop(presentation, this@CornellActivity)
             }
         }
     }
@@ -133,9 +139,5 @@ class CornellActivity : Activity(), CornellHostState {
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
-    }
-
-    private suspend fun renderCornell(gpu: org.graphiks.dawn4k.toolkit.DawnSession, presentation: org.graphiks.dawn4k.toolkit.surface.DawnPresentation) {
-        gpu.runCornellLoop(presentation, this)
     }
 }

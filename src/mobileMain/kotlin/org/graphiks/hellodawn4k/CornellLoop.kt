@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.graphiks.dawn4k.toolkit.DawnSession
 import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
+import org.graphiks.webgpu.GPUCommandEncoder
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -22,26 +23,19 @@ interface CornellHostState {
 }
 
 /**
- * A Kalligraphie-drawn status overlay a host can attach to the shared loop: [update]
- * receives the status text at the loop's 2 Hz refresh cadence, [draw] is invoked as the
- * render frame's extra pass, right over the presented texture. Hosts that show status
- * natively (Android's TextView, while Kalligraphie's Android AARs share one namespace)
- * pass no overlay and keep [CornellHostState.showStatus].
- */
-interface CornellOverlay {
-    fun update(text: String)
-    fun draw(encoder: org.graphiks.webgpu.GPUCommandEncoder, frame: Frame)
-}
-
-/**
  * The Android/iOS render loop over the shared Cornell renderer: drains the camera
  * flag, renders and presents one Dawn frame at a time, tracks an EMA of the frame
- * time and refreshes the host's status at 2 Hz, then drains the GPU on exit.
+ * time and refreshes the status at 2 Hz, then drains the GPU on exit.
+ *
+ * [onStatus] receives the status text at the refresh cadence and [drawOverlay] runs
+ * as the frame's extra pass — a host wires its [GlyphOverlay] through both (iOS), or
+ * shows the text natively (Android, until Kalligraphie's raster-cpu AAR republish).
  */
 suspend fun DawnSession.runCornellLoop(
     presentation: DawnPresentation,
     state: CornellHostState,
-    overlay: CornellOverlay? = null,
+    onStatus: ((String) -> Unit)? = null,
+    drawOverlay: ((GPUCommandEncoder, Frame) -> Unit)? = null,
 ) {
     val renderer = CornellRenderer(device, queue, checkNotNull(presentation.configuration.value).format)
     val timeSource = kotlin.time.TimeSource.Monotonic
@@ -64,7 +58,7 @@ suspend fun DawnSession.runCornellLoop(
                 renderer.renderFrame(
                     Frame(frame.view, frame.extent.width, frame.extent.height),
                     state.mode, state.camera,
-                ) { encoder, rendered -> overlay?.draw(encoder, rendered) }
+                ) { encoder, rendered -> drawOverlay?.invoke(encoder, rendered) }
                 frame.present()
             }
             renderer.consumeResize()
@@ -73,8 +67,7 @@ suspend fun DawnSession.runCornellLoop(
                 val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, state.mode, state.camera)
                     .joinToString("\n")
                 state.showStatus(text)
-                overlay?.update(text)
-            }
+                onStatus?.invoke(text)            }
             delay(16)
         }
     } finally {

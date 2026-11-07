@@ -96,11 +96,9 @@ private suspend fun renderCornellFrames(
     val renderer = CornellRenderer(
         gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format,
     )
-    val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
-    val hudRenderer = hudText?.let { HudRenderer(gpu.device, gpu.queue, it) }
+    val overlay = GlyphOverlay(gpu.device, gpu.queue, renderer.format)
     val adapterName = gpu.adapter.info.description
     var mode = RenderMode.RASTERIZER
-    var hudVertices = FloatArray(0)
     var emaFrameMs = 16.0
     var lastHudAt = System.nanoTime()
 
@@ -120,8 +118,8 @@ private suspend fun renderCornellFrames(
             }
             val frameStartedAt = System.nanoTime()
             if (presentation.withFrame { frame ->
-                    renderer.renderFrame(frame.toFrame(), mode, controls.camera) { encoder, frame ->
-                        hudRenderer?.drawOver(encoder, frame, renderer.format, hudVertices)
+                    renderer.renderFrame(frame.toFrame(), mode, controls.camera) { encoder, rendered ->
+                        overlay.draw(encoder, rendered)
                     }
                     frame.present()
                 }) {
@@ -130,14 +128,9 @@ private suspend fun renderCornellFrames(
             renderer.consumeResize()
             val frameMs = (System.nanoTime() - frameStartedAt) / 1_000_000.0
             emaFrameMs = emaFrameMs * 0.9 + frameMs * 0.1
-            if (hudRenderer != null && System.nanoTime() - lastHudAt > 500_000_000L) {
+            if (System.nanoTime() - lastHudAt > 500_000_000L) {
                 lastHudAt = System.nanoTime()
-                hudVertices = hudRenderer.buildVertices(
-                    hudLines().map { hudText!!.layoutLine(it) },
-                    baseX = 12f,
-                    baseY = 30f,
-                    lineHeight = 26f,
-                )
+                overlay.update(hudLines().joinToString("\n"))
             }
             delay(16)
         }
@@ -147,8 +140,7 @@ private suspend fun renderCornellFrames(
                 gpu.queue.onSubmittedWorkDone().getOrThrow()
             } finally {
                 renderer.close()
-                hudRenderer?.close()
-                hudText?.close()
+                overlay.close()
             }
         }
     }

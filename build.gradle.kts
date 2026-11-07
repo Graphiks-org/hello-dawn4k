@@ -41,22 +41,6 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
             }
         }
-        // The shared glyph chain (Kalligraphie shaping/layout/rasterization) lives here:
-        // every target except Android, whose Kalligraphie AARs currently share one
-        // namespace (AGP refuses the manifest merge) and whose host renders text natively.
-        val glyphMain by creating { dependsOn(commonMain) }
-        jvmMain.get().dependsOn(glyphMain)
-        iosArm64Main.get().dependsOn(glyphMain)
-        iosSimulatorArm64Main.get().dependsOn(glyphMain)
-        wasmJsMain.get().dependsOn(glyphMain)
-        glyphMain.dependencies {
-            api("org.graphiks:kalligraphie:1.0.0-SNAPSHOT")
-            // The kalligraphie umbrella POM declares these runtime-only; consumers redeclare them.
-            implementation("org.graphiks:api:1.0.0-SNAPSHOT")
-            implementation("org.graphiks:shaping:1.0.0-SNAPSHOT")
-            implementation("org.graphiks:layout:1.0.0-SNAPSHOT")
-            implementation("org.graphiks:raster-cpu:1.0.0-SNAPSHOT")
-        }
         val jvmMain by getting {
             dependencies {
                 implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
@@ -98,6 +82,26 @@ kotlin {
                 implementation("org.graphiks:webgpu-browser:0.1.0-SNAPSHOT")
                 implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
             }
+        }
+        // The shared glyph chain (Kalligraphie shaping/layout/rasterization) lives here.
+        // Temporary Android quarantine: the new org.graphiks.kalligraphie coordinates give
+        // every module a unique AGP namespace except raster-cpu, whose hyphenated
+        // namespace ('org.graphiks.kalligraphie.raster-cpu') is not a valid Java package
+        // and AGP refuses its AAR transform. Android keeps its native status text until
+        // that one module is republished; then this collapses into commonMain and the
+        // Android host switches to GlyphOverlay.
+        val glyphMain by creating { dependsOn(commonMain) }
+        jvmMain.dependsOn(glyphMain)
+        iosArm64Main.dependsOn(glyphMain)
+        iosSimulatorArm64Main.dependsOn(glyphMain)
+        wasmJsMain.dependsOn(glyphMain)
+        glyphMain.dependencies {
+            api("org.graphiks.kalligraphie:kalligraphie:1.0.0-SNAPSHOT")
+            // The kalligraphie umbrella POM declares the leaves runtime-only; consumers redeclare them.
+            implementation("org.graphiks.kalligraphie:api:1.0.0-SNAPSHOT")
+            implementation("org.graphiks.kalligraphie:shaping:1.0.0-SNAPSHOT")
+            implementation("org.graphiks.kalligraphie:layout:1.0.0-SNAPSHOT")
+            implementation("org.graphiks.kalligraphie:raster-cpu:1.0.0-SNAPSHOT")
         }
         val jvmTest by getting {
             dependencies {
