@@ -32,7 +32,7 @@ fun main(args: Array<String>) {
                 count++
             }
         }
-        println("${path.substringAfterLast('/')}: bruit local moyen = ${"%.3f".format(total / count)}")
+        println("${path.substringAfterLast('/')}: mean local noise = ${"%.3f".format(total / count)}")
     }
 }
 
