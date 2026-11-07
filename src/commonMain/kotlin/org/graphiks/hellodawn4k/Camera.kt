@@ -4,8 +4,8 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Orthonormal camera basis shared by the WGSL shader, the CPU reference and the orbit
- * controls: a ray through a pixel is `normalize(right * ndc.x * tan * aspect + up * ndc.y * tan + forward)`.
+ * Orthonormal camera basis shared by the WGSL shader and the orbit controls:
+ * a ray through a pixel is `normalize(right * ndc.x * tan * aspect + up * ndc.y * tan + forward)`.
  */
 class CameraBasis(val position: V3, val forward: V3, val tanHalfFov: Float) {
     val right: V3 = forward.cross(WORLD_UP).normalized()
@@ -21,10 +21,6 @@ class CameraBasis(val position: V3, val forward: V3, val tanHalfFov: Float) {
 
     companion object {
         val WORLD_UP = V3(0f, 1f, 0f)
-
-        /** The classic headless framing: fixed position with a slight upward tilt. */
-        fun classic(tanHalfFov: Float = 0.42f, lookUp: Float = 0.12f): CameraBasis =
-            CameraBasis(V3(0f, 1.05f, 2.8f), V3(0f, lookUp, -1f).normalized(), tanHalfFov)
     }
 }
 

@@ -1,6 +1,5 @@
 .gradle/
 build/
-cornell-window.png
 .kotlin/
 .idea/
 local.properties

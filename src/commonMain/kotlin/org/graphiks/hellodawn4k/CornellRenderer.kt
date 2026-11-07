@@ -50,7 +50,7 @@ import org.graphiks.webgpu.descriptors.VertexAttribute
 import org.graphiks.webgpu.descriptors.VertexBufferLayout
 import org.graphiks.webgpu.descriptors.VertexState
 
-const val WORKGROUP_SIZE = 8
+private const val WORKGROUP_SIZE = 8
 
 /** Rendering modes over the shared photon lightmap, mirroring the webgpu-samples renderers. */
 enum class RenderMode { RASTERIZER, RAYTRACER }
@@ -70,8 +70,8 @@ class Frame(val view: GPUTextureView, val width: Int, val height: Int)
  * [renderFrame] inside their own presentation scopes.
  */
 class CornellRenderer(
-    internal val device: GPUDevice,
-    internal val queue: GPUQueue,
+    private val device: GPUDevice,
+    private val queue: GPUQueue,
     internal val format: GPUTextureFormat,
     /** Seed stream for the photon passes; inject a seeded Random for deterministic dumps. */
     private val photonRandom: Random = Random.Default,
@@ -81,18 +81,18 @@ class CornellRenderer(
     private val quadBytes = (scene.quadData.size * 4).toULong()
 
     // --- Shared scene buffers (the sample's Common) ---
-    internal val quads = device.createBuffer(
+    private val quads = device.createBuffer(
         BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst),
     )
-    internal val params = device.createBuffer(
-        BufferDescriptor(48uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    private val params = device.createBuffer(
+        BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    internal var renderWidth = 640
-    internal var renderHeight = 480
-    internal var radiance = device.createBuffer(
+    private var renderWidth = 640
+    private var renderHeight = 480
+    private var radiance = device.createBuffer(
         BufferDescriptor((640 * 480 * 16).toULong(), GPUBufferUsage.Storage),
     )
-    internal val dims = device.createBuffer(
+    private val dims = device.createBuffer(
         BufferDescriptor(16uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
     private val cameraBuffer = device.createBuffer(
@@ -118,15 +118,15 @@ class CornellRenderer(
             GPUBufferUsage.Storage,
         ),
     )
-    internal val lightmapTexture = device.createTexture(
+    private val lightmapTexture = device.createTexture(
         TextureDescriptor(
             size = Extent3D(lightmapSize, lightmapSize, scene.quadCount.toUInt()),
             format = GPUTextureFormat.RGBA16Float,
             usage = GPUTextureUsage.StorageBinding or GPUTextureUsage.TextureBinding,
         ),
     )
-    internal val lightmapView = lightmapTexture.createView()
-    internal val lightmapSampler = device.createSampler(SamplerDescriptor(
+    private val lightmapView = lightmapTexture.createView()
+    private val lightmapSampler = device.createSampler(SamplerDescriptor(
         magFilter = GPUFilterMode.Linear,
         minFilter = GPUFilterMode.Linear,
     ))
@@ -281,22 +281,22 @@ class CornellRenderer(
     )
 
     // --- Rasterized lightmap view (the sample's Rasterizer, their default renderer) ---
-    internal val rasterUniforms = device.createBuffer(
+    private val rasterUniforms = device.createBuffer(
         BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
     private val mesh = buildMesh()
     private val meshVertices: FloatArray get() = mesh.first
-    internal val meshIndices: UShortArray get() = mesh.second
-    internal val vertexBuffer = device.createBuffer(
+    private val meshIndices: UShortArray get() = mesh.second
+    private val vertexBuffer = device.createBuffer(
         BufferDescriptor((meshVertices.size * 4).toULong(), GPUBufferUsage.Vertex or GPUBufferUsage.CopyDst),
     )
-    internal val indexBuffer = device.createBuffer(
+    private val indexBuffer = device.createBuffer(
         BufferDescriptor((meshIndices.size * 2).toULong(), GPUBufferUsage.Index or GPUBufferUsage.CopyDst),
     )
-    internal val rasterShader = device.createShaderModule(
+    private val rasterShader = device.createShaderModule(
         ShaderModuleDescriptor(Shaders.RASTERIZER_WGSL),
     )
-    internal val rasterPipeline = device.createRenderPipeline(
+    private val rasterPipeline = device.createRenderPipeline(
         RenderPipelineDescriptor(
             vertex = VertexState(
                 module = rasterShader,
@@ -338,7 +338,7 @@ class CornellRenderer(
     private var depthHeight = 0
 
     // --- Tonemapping present pass (the sample's tonemapper, fullscreen) ---
-    internal val presentShader = device.createShaderModule(
+    private val presentShader = device.createShaderModule(
         ShaderModuleDescriptor(Shaders.PRESENT_WGSL),
     )
     private val presentBindGroupLayout = device.createBindGroupLayout(
@@ -360,7 +360,7 @@ class CornellRenderer(
     private val presentPipelineLayout = device.createPipelineLayout(
         PipelineLayoutDescriptor(listOf(presentBindGroupLayout)),
     )
-    internal val presentPipeline = device.createRenderPipeline(
+    private val presentPipeline = device.createRenderPipeline(
         RenderPipelineDescriptor(
             layout = presentPipelineLayout,
             vertex = VertexState(module = presentShader, entryPoint = "vs"),
@@ -387,11 +387,9 @@ class CornellRenderer(
 
     private var resizePending = false
 
-    /** True once after the render target switched size (the radiance buffer was reallocated). */
-    fun consumeResize(): Boolean {
-        val pending = resizePending
+    /** Clears the flag set when the render target switched size (radiance buffer reallocated). */
+    fun consumeResize() {
         resizePending = false
-        return pending
     }
 
     /**
@@ -399,7 +397,7 @@ class CornellRenderer(
      * primary-visibility edges get native pixel density. Swaps the radiance buffer and
      * rebuilds the bind groups that reference it.
      */
-    internal fun ensureRenderSize(width: Int, height: Int) {
+    private fun ensureRenderSize(width: Int, height: Int) {
         if (width <= 0 || height <= 0 || (width == renderWidth && height == renderHeight)) return
         renderWidth = width
         renderHeight = height
@@ -430,9 +428,6 @@ class CornellRenderer(
         resizePending = true
     }
 
-    /** Current render extent, for HUD display. */
-    val renderExtent: Pair<Int, Int> get() = renderWidth to renderHeight
-
     /**
      * One radiosity step plus the selected view pass, in a single command buffer.
      * [extraPass] lets the host draw directly over the presented frame (the desktop HUD).
@@ -448,9 +443,8 @@ class CornellRenderer(
             scene.quadCount.toUInt(),
             renderWidth.toUInt(),
             renderHeight.toUInt(),
-            1u,
+            0u, // alignment padding: light lands at byte offset 16
             scene.lightIndex.toUInt(), 0u, 0u, 0u,
-            1u, 0u, 0u, 0u,
         )))
         val workgroupsX = ((renderWidth + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
         val workgroupsY = ((renderHeight + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()

@@ -6,13 +6,6 @@ import kotlin.math.tan
 
 /** Column-major 4x4 matrices (WGSL mat4x4f layout), just what the rasterizer MVP needs. */
 object Mat4 {
-    fun identity(): FloatArray = floatArrayOf(
-        1f, 0f, 0f, 0f,
-        0f, 1f, 0f, 0f,
-        0f, 0f, 1f, 0f,
-        0f, 0f, 0f, 1f,
-    )
-
     /** Standard OpenGL-style perspective; column-major. */
     fun perspective(fovYRadians: Float, aspect: Float, near: Float, far: Float): FloatArray {
         val f = 1f / tan(fovYRadians / 2f)

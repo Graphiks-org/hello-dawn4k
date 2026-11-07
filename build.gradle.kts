@@ -89,6 +89,11 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
             }
         }
+        val jvmTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
     }
 }
 
@@ -105,27 +110,9 @@ tasks.register<JavaExec>("runWindow") {
     mainClass.set("org.graphiks.hellodawn4k.WindowMainKt")
     classpath = kotlin.targets["jvm"].compilations["main"].output.allOutputs + configurations["jvmRuntimeClasspath"]
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+    // Desktop entry point: ./gradlew runWindow
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     if (System.getProperty("os.name").lowercase().contains("mac")) {
         jvmArgs("-XstartOnFirstThread")
     }
-    // Finite smoke run: ./gradlew runWindow -Pcornell.frames=60
-    providers.gradleProperty("cornell.frames").orNull?.let { systemProperty("cornell.frames", it) }
-    // Optional orbit override: -Pcornell.orbit=azimuth,elevation,radius (radians)
-    providers.gradleProperty("cornell.orbit").orNull?.let { systemProperty("cornell.orbit", it) }
-    providers.gradleProperty("cornell.hud").orNull?.let { systemProperty("cornell.hud", it) }
-    providers.gradleProperty("cornell.mode").orNull?.let { systemProperty("cornell.mode", it) }
-    // Deterministic photon seeds for A/B dump comparisons: -Pcornell.seed=42
-    providers.gradleProperty("cornell.seed").orNull?.let { systemProperty("cornell.seed", it) }
-}
-
-// Noise comparison between two framebuffer dumps: ./gradlew noiseMetric a.png b.png
-tasks.register<JavaExec>("noiseMetric") {
-    group = "verification"
-    description = "Mean 3x3 luma standard deviation over the back wall of two dumps."
-    mainClass.set("org.graphiks.hellodawn4k.NoiseMetricKt")
-    classpath = kotlin.targets["jvm"].compilations["main"].output.allOutputs + configurations["jvmRuntimeClasspath"]
-    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
-    args = (providers.gradleProperty("noise.a").orNull?.let { listOf(it) } ?: emptyList()) +
-        (providers.gradleProperty("noise.b").orNull?.let { listOf(it) } ?: emptyList())
 }

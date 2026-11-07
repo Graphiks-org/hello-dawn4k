@@ -24,9 +24,7 @@ struct Params {
     quadCount: u32,
     width: u32,
     height: u32,
-    samples: u32,
     light: vec4u, // x: index of the single emissive quad
-    frame: vec4u, // x: 1-based frame index of the accumulation
 }
 
 struct Camera {
