@@ -21,25 +21,42 @@ import platform.UIKit.UIViewController
  * iOS host over the shared Cornell renderer: UIKit owns the DawnMetalView (Metal-backed),
  * one finger drags orbit the camera, a double tap toggles rasterizer/raytracer. GPU
  * cleanup suspends without blocking UIKit's main queue, like the toolkit's sample host.
+ *
+ * Kotlin/Native forbids mixing Objective-C and Kotlin supertypes on one class, so the
+ * host state (what the shared loop reads) lives in its own Kotlin class and the
+ * controller wraps it.
  */
-fun CornellViewController(): UIViewController = object : UIViewController(nibName = null, bundle = null), CornellHostState {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+private class CornellHostStateImpl : CornellHostState {
     override val camera = OrbitCamera()
     private var _mode = RenderMode.RASTERIZER
     private var _cameraDirty = true
     override val mode: RenderMode get() = _mode
     override val cameraDirty: Boolean get() = _cameraDirty
     override fun consumeCameraDirty() { _cameraDirty = false }
-    private fun dirtyCamera() { _cameraDirty = true }
+    fun dirtyCamera() { _cameraDirty = true }
+    fun toggleMode() {
+        _mode = if (_mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+    }
+
+    // The status overlay is the shared glyph chain; showStatus is reserved for hosts
+    // that still display status natively — this one draws it in the GPU frame.
+    override suspend fun showStatus(text: String) {}
+}
+
+private class CornellViewControllerImpl : UIViewController(nibName = null, bundle = null) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val state = CornellHostStateImpl()
     private var rendering: kotlinx.coroutines.Job? = null
     private var cleanup: kotlinx.coroutines.Job? = null
     private var lastDownAt = 0.0
     private var lastPointer: Pair<Double, Double>? = null
     private var lastPinchDistance: Double? = null
+    private lateinit var metal: DawnMetalView
 
-    // The status overlay is the shared glyph chain; showStatus is reserved for hosts
-    // that still display status natively — this one draws it in the GPU frame.
-    override suspend fun showStatus(text: String) {}
+    override fun loadView() {
+        metal = DawnMetalView(CGRectMake(0.0, 0.0, 640.0, 480.0))
+        view = metal
+    }
 
     private fun pinchDistance(touches: Set<*>): Double? {
         val first = touches.elementAtOrNull(0) as? UITouch ?: return null
@@ -49,12 +66,6 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         val dx = a.first - b.first
         val dy = a.second - b.second
         return kotlin.math.sqrt(dx * dx + dy * dy)
-    }
-    private lateinit var metal: DawnMetalView
-
-    override fun loadView() {
-        metal = DawnMetalView(CGRectMake(0.0, 0.0, 640.0, 480.0))
-        view = metal
     }
 
     override fun touchesBegan(touches: Set<*>, withEvent: UIEvent?) {
@@ -69,7 +80,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         val location = touch.locationInView(metal).useContents { x to y }
         val now = touch.timestamp
         if (now - lastDownAt < 0.3) {
-            _mode = if (_mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+            state.toggleMode()
         }
         lastDownAt = now
         lastPointer = location
@@ -84,8 +95,8 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             val previous = lastPinchDistance
             lastPinchDistance = distance
             if (previous != null && previous > 1.0) {
-                camera.zoomRatio(distance / previous)
-                dirtyCamera()
+                state.camera.zoomRatio(distance / previous)
+                state.dirtyCamera()
             }
             return
         }
@@ -94,8 +105,8 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         val previous = lastPointer
         lastPointer = location
         if (previous != null) {
-            camera.drag(location.first - previous.first, location.second - previous.second)
-            dirtyCamera()
+            state.camera.drag(location.first - previous.first, location.second - previous.second)
+            state.dirtyCamera()
         }
     }
 
@@ -121,7 +132,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
                     gpu.device, gpu.queue, format,
                     scale = UIScreen.mainScreen.nativeScale.toFloat(),
                 ).use { overlay ->
-                    gpu.runCornellLoop(presentation, this@CornellViewController, overlay)
+                    gpu.runCornellLoop(presentation, state, overlay)
                 }
             }
         }
@@ -137,3 +148,6 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
         super.viewDidDisappear(animated)
     }
 }
+
+/** The Xcode app's root controller — CornellViewControllerKt.CornellViewController() in Swift. */
+fun CornellViewController(): UIViewController = CornellViewControllerImpl()

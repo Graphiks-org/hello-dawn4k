@@ -85,6 +85,14 @@ kotlin {
             implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
             implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
         }
+        // The two iOS targets share the UIKit host controller in iosMain, over the
+        // shared mobile loop. The default hierarchy template is off (explicit edges
+        // above), so the source set must be created and attached by hand — otherwise
+        // src/iosMain compiles into nothing and the Xcode app cannot find
+        // CornellViewControllerKt. mobileMain already carries the dawn4k dependencies.
+        val iosMain by creating { dependsOn(mobileMain) }
+        iosArm64Main.dependsOn(iosMain)
+        iosSimulatorArm64Main.dependsOn(iosMain)
         val wasmJsMain by getting {
             dependencies {
                 // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
@@ -93,6 +101,11 @@ kotlin {
             }
         }
         val jvmTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
+        val iosSimulatorArm64Test by getting {
             dependencies {
                 implementation(kotlin("test"))
             }
