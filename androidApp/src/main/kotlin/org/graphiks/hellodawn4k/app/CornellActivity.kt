@@ -100,7 +100,12 @@ class CornellActivity : Activity(), CornellHostState {
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
                 val format = checkNotNull(presentation.configuration.value).format
-                GlyphOverlay(gpu.device, gpu.queue, format).use { overlay ->
+                // The Vulkan surface extent is in physical pixels: scale the HUD by the
+                // display density so it keeps its on-screen (dp) size.
+                GlyphOverlay(
+                    gpu.device, gpu.queue, format,
+                    scale = resources.displayMetrics.density,
+                ).use { overlay ->
                     gpu.runCornellLoop(presentation, this@CornellActivity, overlay)
                 }
             }

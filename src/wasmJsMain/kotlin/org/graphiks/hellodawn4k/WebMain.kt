@@ -52,11 +52,13 @@ fun main() {
         // The status overlay is drawn by the shared Kalligraphie glyph chain, like every
         // other target; the DOM keeps only controls (the mode button) and the fallback card.
         // On web the HarfBuzz wasm module instantiates asynchronously: await the runtime
-        // before opening any facade (a no-op on JVM and iOS).
+        // before opening any facade (a no-op on JVM and iOS). The canvas backing store is
+        // CSS size × devicePixelRatio, so the overlay takes that ratio as its scale to
+        // keep the HUD's on-screen size; browser zoom can change it, hence the rebuild.
         org.graphiks.kalligraphie.initialize()
-        val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
-        val hudRenderer = hudText?.let { HudRenderer(device, device.queue, it) }
-        var hudVertices = FloatArray(0)
+        var hudScale = window.devicePixelRatio.toFloat()
+        var overlay = GlyphOverlay(device, device.queue, format, scale = hudScale)
+        var statusText = ""
 
         fun toggleMode() {
             mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
@@ -105,12 +107,18 @@ fun main() {
                 domCanvas.width = width
                 domCanvas.height = height
             }
+            if (ratio.toFloat() != hudScale) {
+                hudScale = ratio.toFloat()
+                overlay.close()
+                overlay = GlyphOverlay(device, device.queue, format, scale = hudScale)
+                if (statusText.isNotEmpty()) overlay.update(statusText)
+            }
             // The raytracer reads the camera uniform; the web host must keep it fresh.
             renderer.updateCamera(camera.basis())
             val texture = surface.getCurrentTexture()
             val view: GPUTextureView = texture.texture.createView()
             renderer.renderFrame(Frame(view, width, height), mode, camera) { encoder, frame ->
-                hudRenderer?.drawOver(encoder, frame, format, hudVertices)
+                overlay.draw(encoder, frame)
             }
             renderer.consumeResize()
 
@@ -121,13 +129,9 @@ fun main() {
             lastFrameAt = now
             if (now - lastStatusAt > 500 || lastStatusAt < 0.0) {
                 lastStatusAt = now
-                hudRenderer?.let { hud ->
-                    hudVertices = hud.buildVertices(
-                        statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
-                            .map { line -> hudText!!.layoutLine(line) },
-                        baseX = 14f, baseY = 30f, lineHeight = 26f,
-                    )
-                }
+                statusText = statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
+                    .joinToString("\n")
+                overlay.update(statusText)
             }
             window.requestAnimationFrame { tick() }
         }

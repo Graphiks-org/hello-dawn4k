@@ -13,6 +13,7 @@ import org.graphiks.dawn4k.toolkit.surface.DawnMetalView
 import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIEvent
+import platform.UIKit.UIScreen
 import platform.UIKit.UITouch
 import platform.UIKit.UIViewController
 
@@ -114,7 +115,12 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             target.state.first { it.available && it.extent.width > 0 && it.extent.height > 0 }
             withDawnSurface(target) { gpu, presentation ->
                 val format = checkNotNull(presentation.configuration.value).format
-                GlyphOverlay(gpu.device, gpu.queue, format).use { overlay ->
+                // Metal drawables are physical pixels (points × nativeScale): scale the
+                // HUD so it keeps its on-screen (point) size on @2x/@3x displays.
+                GlyphOverlay(
+                    gpu.device, gpu.queue, format,
+                    scale = UIScreen.mainScreen.nativeScale.toFloat(),
+                ).use { overlay ->
                     gpu.runCornellLoop(presentation, this@CornellViewController, overlay)
                 }
             }
