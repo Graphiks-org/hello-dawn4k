@@ -1,107 +1,109 @@
 # hello-dawn4k — Cornell box
 
-Projet **Kotlin Multiplatform** qui utilise le toolkit
-[dawn4k](https://github.com/Graphiks-org/dawn4k) (bindings Dawn/WebGPU) pour
-rendre la fameuse **Cornell box** sur desktop, Android, iOS et le web : l'architecture
-de la [démo Cornell officielle WebGPU](https://webgpu.github.io/webgpu-samples/?sample=cornell)
-portée sur dawn4k — des photons convergent une lightmap par surface, et deux
-rendus commutables la consultent.
+A **Kotlin Multiplatform** project using the
+[dawn4k](https://github.com/Graphiks-org/dawn4k) toolkit (Dawn/WebGPU bindings)
+to render the famous **Cornell box** on desktop, Android, iOS and the web: the
+architecture of the [official WebGPU Cornell sample](https://webgpu.github.io/webgpu-samples/?sample=cornell)
+ported to dawn4k — photons converge a per-surface lightmap, and two switchable
+views read it.
 
-- murs rouge (gauche) et vert (droite), le reste blanc
-- deux boîtes blanches tournées, une haute et une basse
-- une lampe au plafond ; la radiosity photon (sémantiques du sample) converge
-  dans une lightmap indépendamment de la caméra
-- tonemapping Reinhard (exposition 0.5) + gamma 2.2, comme leur tonemapper
+- red (left) and green (right) walls, everything else white
+- two rotated white boxes, one tall, one short
+- a ceiling light; the photon radiosity (the sample's semantics) converges a
+  lightmap independently of the camera
+- Reinhard tonemapping (0.5 exposure) + 2.2 gamma, like their tonemapper
 
-## Lancer
+## Run
 
-| Plateforme | Commande | Entrées |
+| Platform | Command | Inputs |
 | --- | --- | --- |
-| macOS / Linux / Windows (JVM) | `./gradlew runWindow` | drag = orbite, molette = zoom, `M` = mode, `R` = reset, `Échap` |
-| Android (Vulkan, API 28+) | `./gradlew :androidApp:assembleDebug` puis installer l'APK | 1 doigt = orbite, pincer = zoom, double tap = mode |
-| iOS / simulateur (Metal) | `cd iosApp && xcodegen generate && xcodebuild -scheme CornellIOS -sdk iphonesimulator build` | 1 doigt = orbite, pincer = zoom, double tap = mode |
-| Web (WebGPU natif du navigateur) | `./gradlew :wasmJsBrowserDevelopmentExecutableDistribution` puis servir `build/dist/wasmJs/developmentExecutable/` (`python3 -m http.server`) → http://localhost:8000 | drag = orbite, molette/pincer = zoom, `M` ou bouton = mode, `R` = reset |
+| macOS / Linux / Windows (JVM) | `./gradlew runWindow` | drag = orbit, wheel = zoom, `M` = mode, `R` = reset, `Esc` |
+| Android (Vulkan, API 28+) | `./gradlew :androidApp:assembleDebug`, then install the APK | one finger = orbit, pinch = zoom, double tap = mode |
+| iOS / simulator (Metal) | `cd iosApp && xcodegen generate && xcodebuild -scheme CornellIOS -sdk iphonesimulator build` | one finger = orbit, pinch = zoom, double tap = mode |
+| Web (the browser's native WebGPU) | `./gradlew :wasmJsBrowserDevelopmentExecutableDistribution`, then serve `build/dist/wasmJs/developmentExecutable/` (`python3 -m http.server`) → http://localhost:8000 | drag = orbit, wheel/pinch = zoom, `M` or button = mode, `R` = reset |
 
-La cible web est du **Kotlin/WasmJS pur — zéro JavaScript écrit à la main** :
-`webgpu-browser` expose le `navigator.gpu` du navigateur derrière les mêmes
-interfaces `GPUDevice`/`GPUQueue` que Dawn, même source de vérité que les
-cibles natives.
+The web target is **pure Kotlin/WasmJS — zero handwritten JavaScript**:
+`webgpu-browser` exposes the browser's `navigator.gpu` behind the same
+`GPUDevice`/`GPUQueue` interfaces Dawn provides, one source of truth for every
+target.
 
-Le projet Xcode (`iosApp/CornellBox.xcodeproj`) est généré depuis `project.yml`
-par [XcodeGen](https://github.com/yonaskolb/XcodeGen) et reste ignoré ; son script
-de pré-compilation appelle `embedAndSignAppleFrameworkForXcode`, qui construit le
-framework Kotlin `CornellBox.framework` (Dawn statique embarquée par les klibs
-publiées — vérifié par édition de liens + exécution sur simulateur iOS 27).
+The Xcode project (`iosApp/CornellBox.xcodeproj`) is generated from `project.yml`
+by [XcodeGen](https://github.com/yonaskolb/XcodeGen) and stays ignored; its
+pre-build script calls `embedAndSignAppleFrameworkForXcode`, which builds the
+`CornellBox.framework` Kotlin framework (static Dawn embedded by the published
+klibs — verified by linking + running on the iOS 27 simulator).
 
-Prérequis desktop : JDK 25 (le toolchain Gradle le télécharge si besoin) et un
-GPU ou un adaptateur logiciel Metal/Vulkan.
+Desktop prerequisites: JDK 25 (the Gradle toolchain downloads it if needed)
+and a GPU or a software Metal/Vulkan adapter.
 
-La touche **`M`** bascule entre les deux rendus du sample, au-dessus d'une
-passe **radiosity** qui tourne en permanence : des photons émis par la lampe
-déposent leur énergie (post-albédo, ordre du sample) dans des atomiques u32,
-publiés vers une lightmap rgba16float 256² × une couche par quad (rescaling
-anti-overflow du sample, seeds CPU fraîches par frame).
+The **`M`** key switches between the sample's two views, over a **radiosity**
+pass that runs continuously: photons emitted from the light deposit their
+energy (post-albedo, the sample's order) into u32 atomics, published to an
+rgba16float 256² lightmap with one layer per quad (the sample's anti-overflow
+rescaling, fresh CPU seeds every frame).
 
-- **rasterizer** (défaut) — maille de quads indexée, MVP classique, fragment
-  échantillonnant la lightmap ; depth buffer, ~900 fps ;
-- **raytracer** — un rayon primaire par pixel sur la même lightmap, à la
-  résolution physique de la fenêtre.
+- **rasterizer** (default) — indexed quad mesh, classic MVP, a fragment
+  sampling the lightmap; depth buffer, ~900 fps;
+- **raytracer** — one primary ray per pixel over the same lightmap, at the
+  window's physical resolution.
 
-Le **statut** (mode, framerate, photons accumulés, caméra, adaptateur GPU) est
-partout dessiné par la **chaîne glyphe commune** :
-[Kalligraphie](https://github.com/Graphiks-org/Kalligraphie) (facade
-`EditableLineLayoutSession` + shaping HarfBuzz) shape les lignes, une
-rastérisation CPU A8 alimente un atlas R8, et des quads alpha-blendés
-tracent le texte sur la scène — Liberation Sans embarquée en octets
-(Base64, comme les WGSL). Les cinq cibles affichent par le même chemin.
+The **status** (mode, framerate, accumulated photons, camera, GPU adapter) is
+drawn everywhere by the **shared glyph chain**:
+[Kalligraphie](https://github.com/Graphiks-org/Kalligraphie) (the
+`EditableLineLayoutSession` facade + HarfBuzz shaping) shapes the lines, a CPU
+A8 rasterization feeds an R8 atlas, and alpha-blended quads draw the text over
+the scene — Liberation Sans embedded as bytes (Base64, like the WGSL). All
+five targets display through the same path.
 
 ## Tests
 
-`./gradlew jvmTest` fait tourner le **vrai renderer en headless** (session
-Dawn sans fenêtre, format RGBA8Unorm offscreen) sur des photons seedés :
+`./gradlew jvmTest` runs the **real renderer headless** (a window-less Dawn
+session, RGBA8Unorm offscreen target) over seeded photons:
 
-- photons accumulés > 0 en rasterizer et raytracer ;
-- couleurs structurelles : mur gauche rouge-dominant, mur droit vert-dominant ;
-- convergence : le bruit local (écart-type 3×3 sur le mur du fond) chute
-  entre 1 et 30 frames — la régression historique d'accumulation gelée ;
-- le raytracer n'est pas noir (régression de l'uniform caméra jamais écrite) ;
-- la chaîne glyphe complète (fonte → shaping → rasterisation → atlas →
-  passe GPU alpha) laisse des pixels allumés sur une cible hors écran.
+- accumulated photons > 0 in both rasterizer and raytracer;
+- structural colors: the left wall is red-dominant, the right wall
+  green-dominant;
+- convergence: local noise (3×3 luma standard deviation over the back wall)
+  drops between 1 and 30 frames — the historical frozen-accumulation
+  regression;
+- the raytracer is not black (the never-written camera uniform regression);
+- the whole glyph chain (font → shaping → rasterization → atlas → alpha GPU
+  pass) leaves lit pixels on an offscreen target.
 
-Les assertions sont structurelles ou statistiques, donc portables entre GPU ;
-un hash d'or ne le serait pas (il varie avec le driver).
+Assertions are structural or statistical, so they are portable across GPUs; a
+golden hash would not be (it varies with the driver).
 
 ## Structure
 
-| Fichier | Rôle |
+| File | Role |
 | --- | --- |
-| `src/commonMain/kotlin/…/Shaders.kt` | sources WGSL en constantes Kotlin (les frameworks natifs n'embarquent pas les ressources communes) |
-| `src/commonMain/kotlin/…/CornellRenderer.kt` | radiosity + rasterizer + raytracer + tonemap, partagé par tous les hôtes |
-| `src/commonMain/kotlin/…/CornellBox.kt`, `Camera.kt`, `Mat4.kt` | scène, caméra orbitale, perspectives/lookAt |
-| `src/commonMain/kotlin/…/Hud.kt`, `GlyphOverlay.kt` | chaîne glyphe commune : shaping Kalligraphie, atlas R8 GPU, quads alpha — l'affichage du statut des cinq cibles |
-| `src/jvmMain/kotlin/…/WindowMain.kt` | hôte desktop GLFW |
-| `src/jvmMain/kotlin/…/DesktopHudFont.kt` | capture de fonte desktop (extraction Liberation Sans + repli scan macOS) |
-| `src/mobileMain/kotlin/…/CornellLoop.kt` | boucle de rendu partagée Android/iOS (`CornellHostState`) |
-| `src/wasmJsMain/kotlin/…/WebMain.kt` | hôte web Kotlin/WasmJS pur |
-| `src/iosMain/kotlin/…/CornellViewController.kt` | hôte UIKit (DawnMetalView, toucher) |
-| `androidApp/src/main/kotlin/…/CornellActivity.kt` | hôte Android (DawnSurfaceView, toucher) |
-| `iosApp/project.yml` + `CornellApp/AppDelegate.swift` | app iOS générée par XcodeGen |
-| `src/jvmTest/kotlin/…` | tests de rendu headless seedés + métrique de bruit |
+| `src/commonMain/kotlin/…/Shaders.kt` | WGSL sources as Kotlin constants (native frameworks bundle no common resources) |
+| `src/commonMain/kotlin/…/CornellRenderer.kt` | radiosity + rasterizer + raytracer + tonemap, shared by every host |
+| `src/commonMain/kotlin/…/CornellBox.kt`, `Camera.kt`, `Mat4.kt` | scene, orbit camera, perspective/lookAt |
+| `src/commonMain/kotlin/…/Hud.kt`, `GlyphOverlay.kt`, `LiberationSansBytes.kt` | shared glyph chain: Kalligraphie shaping, GPU R8 atlas, alpha quads — the status display of all five targets |
+| `src/jvmMain/kotlin/…/WindowMain.kt` | desktop GLFW host |
+| `src/mobileMain/kotlin/…/CornellLoop.kt` | Android/iOS shared render loop (`CornellHostState`) |
+| `src/wasmJsMain/kotlin/…/WebMain.kt` | pure Kotlin/WasmJS web host |
+| `src/iosMain/kotlin/…/CornellViewController.kt` | UIKit host (DawnMetalView, touch) |
+| `androidApp/src/main/kotlin/…/CornellActivity.kt` | Android host (DawnSurfaceView, touch) |
+| `iosApp/project.yml` + `CornellApp/AppDelegate.swift` | XcodeGen-generated iOS app |
+| `src/jvmTest/kotlin/…` | seeded headless render tests + noise metric |
 
-## Dépendances
+## Dependencies
 
 `org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT`, `dawn4k-toolkit-glfw`,
-`kalligraphie` (+ `api`, `shaping`, `layout`, `raster-cpu` — le POM parapluie
-les déclare runtime-only) et `webgpu-descriptors`, résolues depuis les
-snapshots Maven Central de l'organisation ; les bibliothèques JVM embarquent
-Dawn, GLFW et HarfBuzz, rien d'autre à installer.
+`org.graphiks.kalligraphie:kalligraphie` (+ `api`, `shaping`, `layout`,
+`raster-cpu` — the umbrella POM declares the leaves runtime-only) and
+`webgpu-descriptors`, resolved from the organization's Maven Central
+snapshots; the JVM libraries embed Dawn, GLFW and HarfBuzz — nothing else to
+install.
 
-## Licences
+## Licenses
 
-- Ce projet : **MIT** (voir `LICENSE`).
-- La radiosity (`radiosity.wgsl`) est dérivée de
+- This project: **MIT** (see `LICENSE`).
+- The radiosity (`radiosity.wgsl`) derives from
   [webgpu-samples](https://github.com/webgpu/webgpu-samples) (**BSD-3-Clause**,
-  texte complet dans `THIRD_PARTY_LICENSES/webgpu-samples-LICENSE.txt`).
-- La police Liberation Sans embarquée est sous **OFL-1.1**
-  (`src/jvmMain/resources/fonts/OFL-1.1.txt`).
-- Dépendances dawn4k et Kalligraphie : **MIT**.
+  full text in `THIRD_PARTY_LICENSES/webgpu-samples-LICENSE.txt`).
+- The embedded Liberation Sans font is **OFL-1.1**
+  (`THIRD_PARTY_LICENSES/LiberationSans-OFL-1.1.txt`).
+- dawn4k and Kalligraphie dependencies: **MIT**.
