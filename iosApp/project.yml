@@ -1,0 +1,40 @@
+name: CornellBox
+options:
+  bundleIdPrefix: org.graphiks.hellodawn4k
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  CornellIOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources: [CornellApp]
+    dependencies:
+      - framework: $(BUILT_PRODUCTS_DIR)/CornellBox.framework
+        embed: false
+    info:
+      path: CornellIOS-Info.plist
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.graphiks.hellodawn4k.ios
+        FRAMEWORK_SEARCH_PATHS: ["$(inherited)", "$(SRCROOT)/../build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"]
+        INFOPLIST_KEY_CFBundleDisplayName: hello-dawn4k
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIRequiresFullScreen: YES
+    preBuildScripts:
+      - name: Build Kotlin Cornell framework
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew embedAndSignAppleFrameworkForXcode --console=plain

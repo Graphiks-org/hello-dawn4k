@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>hello-dawn4k — Cornell box (WebGPU)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #mode {
+    position: fixed; top: 12px; right: 12px; color: #fff; background: rgba(0,0,0,.5);
+    border: 1px solid rgba(255,255,255,.3); border-radius: 6px; padding: 6px 10px;
+    font: 13px ui-monospace, Menlo, monospace; cursor: pointer;
+  }
+  #mode:hover { background: rgba(255,255,255,.15); }
+  #fallback {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 32px; color: #fff; background: #000;
+    font: 14px/1.6 ui-monospace, monospace; white-space: pre-wrap; z-index: 10;
+  }
+  #fallback[hidden] { display: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<button id="mode">Mode: rasterizer (M)</button>
+<div id="fallback" hidden></div>
+<script src="hello-dawn4k.js"></script>
+</body>
+</html>

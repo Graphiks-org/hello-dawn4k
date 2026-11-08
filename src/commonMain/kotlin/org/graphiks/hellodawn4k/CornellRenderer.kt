@@ -1,0 +1,665 @@
+package org.graphiks.hellodawn4k
+
+import kotlin.random.Random
+import org.graphiks.webgpu.ArrayBuffer
+import org.graphiks.webgpu.GPUBufferBindingType
+import org.graphiks.webgpu.GPUBufferUsage
+import org.graphiks.webgpu.GPUCommandEncoder
+import org.graphiks.webgpu.GPUCompareFunction
+import org.graphiks.webgpu.GPUComputePassEncoder
+import org.graphiks.webgpu.GPUDevice
+import org.graphiks.webgpu.GPUFilterMode
+import org.graphiks.webgpu.GPUIndexFormat
+import org.graphiks.webgpu.GPULoadOp
+import org.graphiks.webgpu.GPUQueue
+import org.graphiks.webgpu.GPUShaderStage
+import org.graphiks.webgpu.GPUStorageTextureAccess
+import org.graphiks.webgpu.GPUStoreOp
+import org.graphiks.webgpu.GPUTexture
+import org.graphiks.webgpu.GPUTextureFormat
+import org.graphiks.webgpu.GPUTextureUsage
+import org.graphiks.webgpu.GPUTextureView
+import org.graphiks.webgpu.GPUTextureViewDimension
+import org.graphiks.webgpu.GPUVertexFormat
+import org.graphiks.webgpu.descriptors.BindGroupDescriptor
+import org.graphiks.webgpu.descriptors.BindGroupEntry
+import org.graphiks.webgpu.descriptors.BindGroupLayoutDescriptor
+import org.graphiks.webgpu.descriptors.BindGroupLayoutEntry
+import org.graphiks.webgpu.descriptors.BufferBindingLayout
+import org.graphiks.webgpu.descriptors.BufferDescriptor
+import org.graphiks.webgpu.descriptors.Color
+import org.graphiks.webgpu.descriptors.ColorTargetState
+import org.graphiks.webgpu.descriptors.ComputePipelineDescriptor
+import org.graphiks.webgpu.descriptors.DepthStencilState
+import org.graphiks.webgpu.descriptors.Extent3D
+import org.graphiks.webgpu.descriptors.FragmentState
+import org.graphiks.webgpu.descriptors.PipelineLayoutDescriptor
+import org.graphiks.webgpu.descriptors.PrimitiveState
+import org.graphiks.webgpu.descriptors.ProgrammableStage
+import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
+import org.graphiks.webgpu.descriptors.RenderPassDepthStencilAttachment
+import org.graphiks.webgpu.descriptors.RenderPassDescriptor
+import org.graphiks.webgpu.descriptors.RenderPipelineDescriptor
+import org.graphiks.webgpu.descriptors.SamplerBindingLayout
+import org.graphiks.webgpu.descriptors.SamplerDescriptor
+import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
+import org.graphiks.webgpu.descriptors.StorageTextureBindingLayout
+import org.graphiks.webgpu.descriptors.TextureBindingLayout
+import org.graphiks.webgpu.descriptors.TextureDescriptor
+import org.graphiks.webgpu.descriptors.VertexAttribute
+import org.graphiks.webgpu.descriptors.VertexBufferLayout
+import org.graphiks.webgpu.descriptors.VertexState
+
+private const val WORKGROUP_SIZE = 8
+
+/** Rendering modes over the shared photon lightmap, mirroring the webgpu-samples renderers. */
+enum class RenderMode { RASTERIZER, RAYTRACER }
+
+/**
+ * One acquired presentation target: a borrowed texture view and its pixel extent.
+ * Hosts map their platform frame to this (swapchain frame, view target, canvas texture).
+ */
+class Frame(val view: GPUTextureView, val width: Int, val height: Int)
+
+/**
+ * Owns every GPU resource of the Cornell box renderers, mirroring the webgpu-samples
+ * classes: shared scene buffers (Common), the photon radiosity lightmap (Radiosity),
+ * the raster pipeline over an indexed quad mesh (Rasterizer), the ray-traced lightmap
+ * view (Raytracer) and the tonemapping present pass (Tonemapper). Platform hosts
+ * (GLFW window, Android DawnSurfaceView, iOS DawnMetalView) drive it through
+ * [renderFrame] inside their own presentation scopes.
+ */
+class CornellRenderer(
+    private val device: GPUDevice,
+    private val queue: GPUQueue,
+    internal val format: GPUTextureFormat,
+    /** Seed stream for the photon passes; inject a seeded Random for deterministic dumps. */
+    private val photonRandom: Random = Random.Default,
+) : AutoCloseable {
+    private var closed = false
+    private val scene = CornellBox.scene()
+    private val quadBytes = (scene.quadData.size * 4).toULong()
+
+    // --- Shared scene buffers (the sample's Common) ---
+    private val quads = device.createBuffer(
+        BufferDescriptor(quadBytes, GPUBufferUsage.Storage or GPUBufferUsage.CopyDst),
+    )
+    private val params = device.createBuffer(
+        BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+    private var renderWidth = 640
+    private var renderHeight = 480
+    private var radiance = device.createBuffer(
+        BufferDescriptor((640 * 480 * 16).toULong(), GPUBufferUsage.Storage),
+    )
+    private val dims = device.createBuffer(
+        BufferDescriptor(16uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+    private val cameraBuffer = device.createBuffer(
+        BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+
+    init {
+        queue.writeBuffer(quads, 0uL, ArrayBuffer.of(scene.quadData))
+        queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(640u, 480u, 0u, 0u)))
+    }
+
+    /** The sample's concatenation pattern: every pass shader is common.wgsl + its own part. */
+    private fun shader(pass: String): String = Shaders.COMMON_WGSL + "\n" + pass
+
+    // --- Radiosity (the sample's Radiosity): photons -> atomic u32 -> 256x256 lightmap ---
+    private val lightmapSize = 256u
+    private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
+    private val radiosityCode: String = Shaders.COMMON_WGSL + "\n" + Shaders.RADIOSITY_WGSL
+
+    private val photonAccumulation = device.createBuffer(
+        BufferDescriptor(
+            3uL * 4uL * lightmapSize * lightmapSize * scene.quadCount.toULong(),
+            GPUBufferUsage.Storage,
+        ),
+    )
+    private val lightmapTexture = device.createTexture(
+        TextureDescriptor(
+            size = Extent3D(lightmapSize, lightmapSize, scene.quadCount.toUInt()),
+            format = GPUTextureFormat.RGBA16Float,
+            usage = GPUTextureUsage.StorageBinding or GPUTextureUsage.TextureBinding,
+        ),
+    )
+    private val lightmapView = lightmapTexture.createView()
+    private val lightmapSampler = device.createSampler(SamplerDescriptor(
+        magFilter = GPUFilterMode.Linear,
+        minFilter = GPUFilterMode.Linear,
+    ))
+    private val photonParams = device.createBuffer(
+        BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+    private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(radiosityCode))
+
+    // Explicit bind group layouts (the sample's pattern): Firefox's auto layout may
+    // include unused bindings declared in the common module, causing a mismatch with
+    // the bind group and an invalid pipeline. Explicit layouts pin the interface.
+    private val radiosityBindGroupLayout = device.createBindGroupLayout(
+        BindGroupLayoutDescriptor(listOf(
+            BindGroupLayoutEntry(
+                0u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.ReadOnlyStorage,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                2u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                4u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Storage,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                5u, GPUShaderStage.Compute,
+                storageTexture = StorageTextureBindingLayout(
+                    format = GPUTextureFormat.RGBA16Float,
+                    access = GPUStorageTextureAccess.WriteOnly,
+                    viewDimension = GPUTextureViewDimension.TwoDArray,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                6u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
+                ),
+            ),
+        )),
+    )
+    private val radiosityPipelineLayout = device.createPipelineLayout(
+        PipelineLayoutDescriptor(listOf(radiosityBindGroupLayout)),
+    )
+    private val radiosityPipeline = device.createComputePipeline(
+        ComputePipelineDescriptor(
+            layout = radiosityPipelineLayout,
+            compute = ProgrammableStage(radiosityShader, "radiosity"),
+        ),
+    )
+    private val publishPipeline = device.createComputePipeline(
+        ComputePipelineDescriptor(
+            layout = radiosityPipelineLayout,
+            compute = ProgrammableStage(radiosityShader, "publishLightmap"),
+        ),
+    )
+    private val radiosityBinding = device.createBindGroup(
+        BindGroupDescriptor(
+            radiosityBindGroupLayout,
+            listOf(
+                BindGroupEntry(0u, quads),
+                BindGroupEntry(2u, params),
+                BindGroupEntry(4u, photonAccumulation),
+                BindGroupEntry(5u, lightmapView),
+                BindGroupEntry(6u, photonParams),
+            ),
+        ),
+    )
+    private val publishBinding = device.createBindGroup(
+        BindGroupDescriptor(
+            radiosityBindGroupLayout,
+            listOf(
+                BindGroupEntry(0u, quads),
+                BindGroupEntry(2u, params),
+                BindGroupEntry(4u, photonAccumulation),
+                BindGroupEntry(5u, lightmapView),
+                BindGroupEntry(6u, photonParams),
+            ),
+        ),
+    )
+    private var accumulationMean = 0.0
+    var photonsEmitted = 0.0
+        private set
+
+    // --- Ray-traced lightmap view (the sample's Raytracer) ---
+    private val raytracerShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RAYTRACER_WGSL)))
+    private val raytracerBindGroupLayout = device.createBindGroupLayout(
+        BindGroupLayoutDescriptor(listOf(
+            BindGroupLayoutEntry(
+                0u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.ReadOnlyStorage,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                1u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Storage,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                2u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                3u, GPUShaderStage.Compute,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                4u, GPUShaderStage.Compute,
+                texture = TextureBindingLayout(
+                    viewDimension = GPUTextureViewDimension.TwoDArray,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                5u, GPUShaderStage.Compute,
+                sampler = SamplerBindingLayout(),
+            ),
+        )),
+    )
+    private val raytracerPipelineLayout = device.createPipelineLayout(
+        PipelineLayoutDescriptor(listOf(raytracerBindGroupLayout)),
+    )
+    private val raytracerPipeline = device.createComputePipeline(
+        ComputePipelineDescriptor(
+            layout = raytracerPipelineLayout,
+            compute = ProgrammableStage(raytracerShader, "main"),
+        ),
+    )
+    private var raytracerBinding = device.createBindGroup(
+        BindGroupDescriptor(
+            raytracerBindGroupLayout,
+            listOf(
+                BindGroupEntry(0u, quads),
+                BindGroupEntry(1u, radiance),
+                BindGroupEntry(2u, params),
+                BindGroupEntry(3u, cameraBuffer),
+                BindGroupEntry(4u, lightmapView),
+                BindGroupEntry(5u, lightmapSampler),
+            ),
+        ),
+    )
+
+    // --- Rasterized lightmap view (the sample's Rasterizer, their default renderer) ---
+    private val rasterUniforms = device.createBuffer(
+        BufferDescriptor(64uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
+    )
+    private val mesh = buildMesh()
+    private val meshVertices: FloatArray get() = mesh.first
+    private val meshIndices: UShortArray get() = mesh.second
+    private val vertexBuffer = device.createBuffer(
+        BufferDescriptor((meshVertices.size * 4).toULong(), GPUBufferUsage.Vertex or GPUBufferUsage.CopyDst),
+    )
+    private val indexBuffer = device.createBuffer(
+        BufferDescriptor((meshIndices.size * 2).toULong(), GPUBufferUsage.Index or GPUBufferUsage.CopyDst),
+    )
+    private val rasterShader = device.createShaderModule(
+        ShaderModuleDescriptor(Shaders.RASTERIZER_WGSL),
+    )
+    private val rasterPipeline = device.createRenderPipeline(
+        RenderPipelineDescriptor(
+            vertex = VertexState(
+                module = rasterShader,
+                entryPoint = "vs_main",
+                buffers = listOf(
+                    VertexBufferLayout(
+                        arrayStride = 40uL,
+                        attributes = listOf(
+                            VertexAttribute(GPUVertexFormat.Float32x4, 0uL, 0u),
+                            VertexAttribute(GPUVertexFormat.Float32x3, 16uL, 1u),
+                            VertexAttribute(GPUVertexFormat.Float32x3, 28uL, 2u),
+                        ),
+                    ),
+                ),
+            ),
+            fragment = FragmentState(
+                module = rasterShader,
+                entryPoint = "fs_main",
+                targets = listOf(ColorTargetState(format)),
+            ),
+            primitive = PrimitiveState(),
+            depthStencil = DepthStencilState(
+                format = GPUTextureFormat.Depth24Plus,
+                depthWriteEnabled = true,
+                depthCompare = GPUCompareFunction.Less,
+            ),
+        ),
+    )
+    private val rasterLayout = rasterPipeline.getBindGroupLayout(0u)
+    private val rasterBinding = device.createBindGroup(
+        BindGroupDescriptor(
+            rasterLayout,
+            listOf(BindGroupEntry(0u, rasterUniforms), BindGroupEntry(1u, lightmapView), BindGroupEntry(2u, lightmapSampler)),
+        ),
+    )
+    private var depthTexture: GPUTexture? = null
+    private var depthView: GPUTextureView? = null
+    private var depthWidth = 0
+    private var depthHeight = 0
+
+    // --- Tonemapping present pass (the sample's tonemapper, fullscreen) ---
+    private val presentShader = device.createShaderModule(
+        ShaderModuleDescriptor(Shaders.PRESENT_WGSL),
+    )
+    private val presentBindGroupLayout = device.createBindGroupLayout(
+        BindGroupLayoutDescriptor(listOf(
+            BindGroupLayoutEntry(
+                0u, GPUShaderStage.Fragment,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.ReadOnlyStorage,
+                ),
+            ),
+            BindGroupLayoutEntry(
+                1u, GPUShaderStage.Fragment,
+                buffer = BufferBindingLayout(
+                    type = GPUBufferBindingType.Uniform,
+                ),
+            ),
+        )),
+    )
+    private val presentPipelineLayout = device.createPipelineLayout(
+        PipelineLayoutDescriptor(listOf(presentBindGroupLayout)),
+    )
+    private val presentPipeline = device.createRenderPipeline(
+        RenderPipelineDescriptor(
+            layout = presentPipelineLayout,
+            vertex = VertexState(module = presentShader, entryPoint = "vs"),
+            fragment = FragmentState(
+                module = presentShader,
+                entryPoint = "fs",
+                targets = listOf(ColorTargetState(format)),
+            ),
+        ),
+    )
+    private var presentBinding = device.createBindGroup(
+        BindGroupDescriptor(presentBindGroupLayout, listOf(BindGroupEntry(0u, radiance), BindGroupEntry(1u, dims))),
+    )
+
+    init {
+        queue.writeBuffer(vertexBuffer, 0uL, ArrayBuffer.of(meshVertices))
+        queue.writeBuffer(indexBuffer, 0uL, ArrayBuffer.of(meshIndices))
+    }
+
+    /** Writes the camera basis uniform; called whenever the orbit controls move. */
+    fun updateCamera(basis: CameraBasis) {
+        queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
+    }
+
+    private var resizePending = false
+
+    /** Clears the flag set when the render target switched size (radiance buffer reallocated). */
+    fun consumeResize() {
+        resizePending = false
+    }
+
+    /**
+     * The ray-traced view renders at the target's physical extent, like the rasterizer:
+     * primary-visibility edges get native pixel density. Swaps the radiance buffer and
+     * rebuilds the bind groups that reference it.
+     */
+    private fun ensureRenderSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0 || (width == renderWidth && height == renderHeight)) return
+        renderWidth = width
+        renderHeight = height
+        val replacement = device.createBuffer(
+            BufferDescriptor((width * height * 16).toULong(), GPUBufferUsage.Storage),
+        )
+        queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(width.toUInt(), height.toUInt(), 0u, 0u)))
+        raytracerBinding.close()
+        raytracerBinding = device.createBindGroup(
+            BindGroupDescriptor(
+                raytracerBindGroupLayout,
+                listOf(
+                    BindGroupEntry(0u, quads),
+                    BindGroupEntry(1u, replacement),
+                    BindGroupEntry(2u, params),
+                    BindGroupEntry(3u, cameraBuffer),
+                    BindGroupEntry(4u, lightmapView),
+                    BindGroupEntry(5u, lightmapSampler),
+                ),
+            ),
+        )
+        presentBinding.close()
+        presentBinding = device.createBindGroup(
+            BindGroupDescriptor(presentBindGroupLayout, listOf(BindGroupEntry(0u, replacement), BindGroupEntry(1u, dims))),
+        )
+        radiance.close()
+        radiance = replacement
+        resizePending = true
+    }
+
+    /**
+     * One radiosity step plus the selected view pass, in a single command buffer.
+     * [extraPass] lets the host draw directly over the presented frame (the desktop HUD).
+     */
+    fun renderFrame(
+        frame: Frame,
+        mode: RenderMode,
+        orbit: OrbitCamera,
+        extraPass: ((GPUCommandEncoder, Frame) -> Unit)? = null,
+    ) {
+        ensureRenderSize(frame.width, frame.height)
+        queue.writeBuffer(params, 0uL, ArrayBuffer.of(uintArrayOf(
+            scene.quadCount.toUInt(),
+            renderWidth.toUInt(),
+            renderHeight.toUInt(),
+            0u, // alignment padding: light lands at byte offset 16
+            scene.lightIndex.toUInt(), 0u, 0u, 0u,
+        )))
+        val workgroupsX = ((renderWidth + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
+        val workgroupsY = ((renderHeight + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
+        val encoder = device.createCommandEncoder()
+        try {
+            val pass = encoder.beginComputePass()
+            try {
+                runRadiosity(pass)
+                if (mode == RenderMode.RAYTRACER) {
+                    pass.setPipeline(raytracerPipeline)
+                    pass.setBindGroup(0u, raytracerBinding)
+                    pass.dispatchWorkgroups(workgroupsX, workgroupsY)
+                }
+            } finally {
+                pass.end()
+            }
+            if (mode == RenderMode.RASTERIZER) {
+                rasterize(encoder, frame, orbit)
+            } else {
+                present(encoder, frame)
+            }
+            extraPass?.invoke(encoder, frame)
+            encoder.finish().use { queue.submit(listOf(it)) }
+        } finally {
+            encoder.close()
+        }
+    }
+
+    /**
+     * Photon-mapping radiosity, run every frame regardless of the render mode:
+     * 1024 workgroups x 256 photons bounce from the light into the atomic accumulation
+     * buffer, then the publish pass writes the progressive mean to the lightmap.
+     * Seeds are fresh CPU randoms each frame (the sample's route) so successive frames
+     * never retrace the same photons. Mirrors the webgpu-samples overflow rescaling.
+     */
+    private fun runRadiosity(pass: GPUComputePassEncoder) {
+        val photonsPerFrame = 256u * 1024u
+        accumulationMean += (photonsPerFrame.toDouble() * 100000.0) / photonTexels
+        val toLightmapScale = 1.0 / accumulationMean
+        val bufferScale = if (accumulationMean > 2 * 0x10000000) 0.5 else 1.0
+        accumulationMean *= bufferScale
+        photonsEmitted += photonsPerFrame.toDouble()
+        val seeds = photonRandom
+        queue.writeBuffer(photonParams, 0uL, ArrayBuffer.of(floatArrayOf(
+            toLightmapScale.toFloat(),
+            bufferScale.toFloat(),
+            Float.fromBits(scene.quadCount),
+            Float.fromBits(scene.lightIndex),
+            Float.fromBits(seeds.nextInt()),
+            Float.fromBits(seeds.nextInt()),
+            Float.fromBits(seeds.nextInt()),
+            0f,
+        )))
+        pass.setPipeline(radiosityPipeline)
+        pass.setBindGroup(0u, radiosityBinding)
+        pass.dispatchWorkgroups(1024u)
+        pass.setPipeline(publishPipeline)
+        pass.setBindGroup(0u, publishBinding)
+        pass.dispatchWorkgroups(lightmapSize / 8u, lightmapSize / 8u, scene.quadCount.toUInt())
+    }
+
+    /** The sample's rasterizer: MVP over the indexed quad mesh, tonemapped inline. */
+    private fun rasterize(encoder: GPUCommandEncoder, frame: Frame, orbit: OrbitCamera) {
+        val extentWidth = frame.width
+        val extentHeight = frame.height
+        val basis = orbit.basis()
+        // The sample's 45-degree fov is NOT ours: the orbit camera frames the box at
+        // 2*atan(0.30); using it here made M look like it moved the camera.
+        val fovY = 2f * kotlin.math.atan(orbit.tanHalfFov)
+        val mvp = Mat4.multiply(
+            Mat4.perspective(fovY, extentWidth.toFloat() / extentHeight, 0.5f, 100f),
+            Mat4.lookAt(basis.position, orbit.target, V3(0f, 1f, 0f)),
+        )
+        queue.writeBuffer(rasterUniforms, 0uL, ArrayBuffer.of(mvp))
+        if (depthWidth != extentWidth || depthHeight != extentHeight) {
+            depthView?.close()
+            depthTexture?.close()
+            depthTexture = device.createTexture(
+                TextureDescriptor(
+                    size = Extent3D(extentWidth.toUInt(), extentHeight.toUInt()),
+                    format = GPUTextureFormat.Depth24Plus,
+                    usage = GPUTextureUsage.RenderAttachment,
+                ),
+            )
+            depthView = depthTexture!!.createView()
+            depthWidth = extentWidth
+            depthHeight = extentHeight
+        }
+        val rasterPass = encoder.beginRenderPass(
+            RenderPassDescriptor(
+                colorAttachments = listOf(
+                    RenderPassColorAttachment(
+                        frame.view,
+                        loadOp = GPULoadOp.Clear,
+                        storeOp = GPUStoreOp.Store,
+                        clearValue = Color(0.0, 0.0, 0.0, 1.0),
+                    ),
+                ),
+                depthStencilAttachment = RenderPassDepthStencilAttachment(
+                    view = depthView!!,
+                    depthClearValue = 1.0f,
+                    depthLoadOp = GPULoadOp.Clear,
+                    depthStoreOp = GPUStoreOp.Store,
+                ),
+            ),
+        )
+        try {
+            rasterPass.setPipeline(rasterPipeline)
+            rasterPass.setBindGroup(0u, rasterBinding)
+            rasterPass.setVertexBuffer(0u, vertexBuffer)
+            rasterPass.setIndexBuffer(indexBuffer, GPUIndexFormat.Uint16)
+            rasterPass.drawIndexed(meshIndices.size.toUInt())
+        } finally {
+            rasterPass.end()
+        }
+    }
+
+    /** The sample's tonemapper folded into a fullscreen pass over the radiance buffer. */
+    private fun present(encoder: GPUCommandEncoder, frame: Frame) {
+        val pass = encoder.beginRenderPass(RenderPassDescriptor(colorAttachments = listOf(
+            RenderPassColorAttachment(
+                frame.view,
+                loadOp = GPULoadOp.Clear,
+                storeOp = GPUStoreOp.Store,
+                clearValue = Color(0.0, 0.0, 0.0, 1.0),
+            ),
+        )))
+        try {
+            pass.setPipeline(presentPipeline)
+            pass.setBindGroup(0u, presentBinding)
+            pass.draw(3u)
+        } finally {
+            pass.end()
+        }
+    }
+
+    /** Triangulates the scene quads: 4 vertices (position, uv+layer, emissive) + 6 indices each. */
+    private fun buildMesh(): Pair<FloatArray, UShortArray> {
+        val vertices = FloatArray(scene.quadCount * 4 * 10)
+        val indices = UShortArray(scene.quadCount * 6)
+        val data = scene.quadData
+        for (quad in 0 until scene.quadCount) {
+            val o = quad * Scene.FLOATS_PER_QUAD
+            val origin = floatArrayOf(data[o], data[o + 1], data[o + 2])
+            val edge1 = floatArrayOf(data[o + 4], data[o + 5], data[o + 6])
+            val edge2 = floatArrayOf(data[o + 8], data[o + 9], data[o + 10])
+            val emissive = floatArrayOf(data[o + 16], data[o + 17], data[o + 18])
+            val corners = arrayOf(
+                origin,
+                floatArrayOf(origin[0] + edge1[0], origin[1] + edge1[1], origin[2] + edge1[2]),
+                floatArrayOf(origin[0] + edge1[0] + edge2[0], origin[1] + edge1[1] + edge2[1], origin[2] + edge1[2] + edge2[2]),
+                floatArrayOf(origin[0] + edge2[0], origin[1] + edge2[1], origin[2] + edge2[2]),
+            )
+            val uvs = arrayOf(floatArrayOf(0f, 0f), floatArrayOf(1f, 0f), floatArrayOf(1f, 1f), floatArrayOf(0f, 1f))
+            for (corner in 0 until 4) {
+                val v = (quad * 4 + corner) * 10
+                vertices[v] = corners[corner][0]
+                vertices[v + 1] = corners[corner][1]
+                vertices[v + 2] = corners[corner][2]
+                vertices[v + 3] = 1f
+                vertices[v + 4] = uvs[corner][0]
+                vertices[v + 5] = uvs[corner][1]
+                vertices[v + 6] = quad.toFloat()
+                vertices[v + 7] = emissive[0]
+                vertices[v + 8] = emissive[1]
+                vertices[v + 9] = emissive[2]
+            }
+            val base = quad * 6
+            val first = (quad * 4).toUShort()
+            indices[base] = first
+            indices[base + 1] = (first + 1u).toUShort()
+            indices[base + 2] = (first + 2u).toUShort()
+            indices[base + 3] = first
+            indices[base + 4] = (first + 2u).toUShort()
+            indices[base + 5] = (first + 3u).toUShort()
+        }
+        return vertices to indices
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        radiosityBinding.close()
+        publishBinding.close()
+        raytracerBinding.close()
+        rasterBinding.close()
+        presentBinding.close()
+        radiosityBindGroupLayout.close()
+        radiosityPipelineLayout.close()
+                raytracerBindGroupLayout.close()
+        rasterLayout.close()
+        presentBindGroupLayout.close()
+        rasterPipeline.close()
+        raytracerPipeline.close()
+        publishPipeline.close()
+        radiosityPipeline.close()
+        presentPipeline.close()
+        rasterShader.close()
+        raytracerShader.close()
+        radiosityShader.close()
+        presentShader.close()
+        indexBuffer.close()
+        vertexBuffer.close()
+        rasterUniforms.close()
+        photonParams.close()
+        lightmapSampler.close()
+        depthView?.close()
+        depthTexture?.close()
+        lightmapView.close()
+        lightmapTexture.close()
+        photonAccumulation.close()
+        cameraBuffer.close()
+        dims.close()
+        radiance.close()
+        params.close()
+        quads.close()
+    }
+}
