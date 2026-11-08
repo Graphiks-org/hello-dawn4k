@@ -53,10 +53,7 @@ partout dessiné par la **chaîne glyphe commune** :
 `EditableLineLayoutSession` + shaping HarfBuzz) shape les lignes, une
 rastérisation CPU A8 alimente un atlas R8, et des quads alpha-blendés
 tracent le texte sur la scène — Liberation Sans embarquée en octets
-(Base64, comme les WGSL). Exception Android : le module `raster-cpu`
-publie encore un namespace à tiret (`org.graphiks.kalligraphie.raster-cpu`,
-identifiant Java invalide) qu'AGP refuse ; l'hôte Android garde donc son
-`TextView` en attendant la republication de ce seul module.
+(Base64, comme les WGSL). Les cinq cibles affichent par le même chemin.
 
 ## Tests
 
@@ -81,7 +78,7 @@ un hash d'or ne le serait pas (il varie avec le driver).
 | `src/commonMain/kotlin/…/Shaders.kt` | sources WGSL en constantes Kotlin (les frameworks natifs n'embarquent pas les ressources communes) |
 | `src/commonMain/kotlin/…/CornellRenderer.kt` | radiosity + rasterizer + raytracer + tonemap, partagé par tous les hôtes |
 | `src/commonMain/kotlin/…/CornellBox.kt`, `Camera.kt`, `Mat4.kt` | scène, caméra orbitale, perspectives/lookAt |
-| `src/glyphMain/kotlin/…/Hud.kt` | chaîne glyphe commune : shaping Kalligraphie, atlas R8 GPU, quads alpha (jvm + iOS + web ; Android rend son texte nativement et ses AAR Kalligraphie partagent un namespace) |
+| `src/commonMain/kotlin/…/Hud.kt`, `GlyphOverlay.kt` | chaîne glyphe commune : shaping Kalligraphie, atlas R8 GPU, quads alpha — l'affichage du statut des cinq cibles |
 | `src/jvmMain/kotlin/…/WindowMain.kt` | hôte desktop GLFW |
 | `src/jvmMain/kotlin/…/DesktopHudFont.kt` | capture de fonte desktop (extraction Liberation Sans + repli scan macOS) |
 | `src/mobileMain/kotlin/…/CornellLoop.kt` | boucle de rendu partagée Android/iOS (`CornellHostState`) |

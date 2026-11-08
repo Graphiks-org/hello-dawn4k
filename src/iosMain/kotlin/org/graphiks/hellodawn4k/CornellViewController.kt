@@ -115,11 +115,7 @@ fun CornellViewController(): UIViewController = object : UIViewController(nibNam
             withDawnSurface(target) { gpu, presentation ->
                 val format = checkNotNull(presentation.configuration.value).format
                 GlyphOverlay(gpu.device, gpu.queue, format).use { overlay ->
-                    gpu.runCornellLoop(
-                        presentation, this@CornellViewController,
-                        onStatus = { overlay.update(it) },
-                        drawOverlay = { encoder, frame -> overlay.draw(encoder, frame) },
-                    )
+                    gpu.runCornellLoop(presentation, this@CornellViewController, overlay)
                 }
             }
         }

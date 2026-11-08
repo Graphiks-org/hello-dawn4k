@@ -5,7 +5,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.graphiks.dawn4k.toolkit.DawnSession
 import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
-import org.graphiks.webgpu.GPUCommandEncoder
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -25,17 +24,12 @@ interface CornellHostState {
 /**
  * The Android/iOS render loop over the shared Cornell renderer: drains the camera
  * flag, renders and presents one Dawn frame at a time, tracks an EMA of the frame
- * time and refreshes the status at 2 Hz, then drains the GPU on exit.
- *
- * [onStatus] receives the status text at the refresh cadence and [drawOverlay] runs
- * as the frame's extra pass — a host wires its [GlyphOverlay] through both (iOS), or
- * shows the text natively (Android, until Kalligraphie's raster-cpu AAR republish).
+ * time and refreshes the status overlay at 2 Hz, then drains the GPU on exit.
  */
 suspend fun DawnSession.runCornellLoop(
     presentation: DawnPresentation,
     state: CornellHostState,
-    onStatus: ((String) -> Unit)? = null,
-    drawOverlay: ((GPUCommandEncoder, Frame) -> Unit)? = null,
+    overlay: GlyphOverlay? = null,
 ) {
     val renderer = CornellRenderer(device, queue, checkNotNull(presentation.configuration.value).format)
     val timeSource = kotlin.time.TimeSource.Monotonic
@@ -58,7 +52,7 @@ suspend fun DawnSession.runCornellLoop(
                 renderer.renderFrame(
                     Frame(frame.view, frame.extent.width, frame.extent.height),
                     state.mode, state.camera,
-                ) { encoder, rendered -> drawOverlay?.invoke(encoder, rendered) }
+                ) { encoder, rendered -> overlay?.draw(encoder, rendered) }
                 frame.present()
             }
             renderer.consumeResize()
@@ -67,7 +61,7 @@ suspend fun DawnSession.runCornellLoop(
                 val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, state.mode, state.camera)
                     .joinToString("\n")
                 state.showStatus(text)
-                onStatus?.invoke(text)            }
+                overlay?.update(text)            }
             delay(16)
         }
     } finally {
