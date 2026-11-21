@@ -10,7 +10,16 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         mavenCentral()
-        google()
+        google {
+            // Only Android artifacts live here. Without this filter Gradle also asks Google
+            // for every other group, and a DNS failure on dl.google.com disables the
+            // repository for all of them, including the Graphiks snapshots.
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
         ivy("https://nodejs.org/dist") {
             name = "Distributions"
             patternLayout {
@@ -29,7 +38,11 @@ dependencyResolutionManagement {
         }
         maven("https://central.sonatype.com/repository/maven-snapshots/") {
             name = "GraphiksSnapshots"
-            content { includeGroup("org.graphiks"); includeGroup("org.graphiks.kalligraphie") }
+            content {
+                includeGroup("org.graphiks")
+                includeGroup("org.graphiks.webgpu")
+                includeGroup("org.graphiks.kalligraphie")
+            }
         }
     }
 }

@@ -11,8 +11,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
-import org.graphiks.dawn4k.toolkit.surface.DawnSurfaceView
-import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
+import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnSurfaceView
+import org.graphiks.dawn4k.webgpu.toolkit.surface.withDawnSurface
 import org.graphiks.hellodawn4k.CornellHostState
 import org.graphiks.hellodawn4k.GlyphOverlay
 import org.graphiks.hellodawn4k.OrbitCamera

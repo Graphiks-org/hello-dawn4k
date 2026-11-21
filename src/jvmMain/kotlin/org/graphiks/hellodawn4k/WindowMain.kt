@@ -8,12 +8,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import org.graphiks.dawn4k.toolkit.DawnSessionOptions
-import org.graphiks.dawn4k.toolkit.glfw.DawnWindow
-import org.graphiks.dawn4k.toolkit.glfw.DawnWindowEvent
-import org.graphiks.dawn4k.toolkit.glfw.DawnWindowOptions
-import org.graphiks.dawn4k.toolkit.glfw.withDawnWindow
-import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
+import org.graphiks.dawn4k.webgpu.toolkit.DawnSessionOptions
+import org.graphiks.dawn4k.webgpu.toolkit.glfw.DawnWindow
+import org.graphiks.dawn4k.webgpu.toolkit.glfw.DawnWindowEvent
+import org.graphiks.dawn4k.webgpu.toolkit.glfw.DawnWindowOptions
+import org.graphiks.dawn4k.webgpu.toolkit.glfw.withDawnWindow
+import org.graphiks.dawn4k.webgpu.toolkit.interop.ToolkitSessionView
+import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnFrame
+import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnPresentation
 import kotlin.time.Duration.Companion.seconds
 
 // GLFW constants forwarded as-is by the toolkit's window events.
@@ -28,6 +30,10 @@ private const val GLFW_KEY_ESCAPE = 256
  * Desktop host: a GLFW window over the shared Cornell renderer. The radiosity lightmap
  * converges in surface space while M toggles the rasterizer (default) and raytracer
  * views; drag orbits, the wheel zooms, R resets, Escape closes.
+ *
+ * The top-level glfw.withDawnWindow is the dawn4k-native path (DawnMainThreadLoop):
+ * it owns the main-loop pump and already runs the block on the session's execution
+ * owner — the interop facade's WindowHost path is not usable for this today.
  */
 fun main() = runBlocking {
     val camera = OrbitCamera()
@@ -89,7 +95,7 @@ private class OrbitControls(private val window: DawnWindow, val camera: OrbitCam
 
 /** The desktop render loop: shared renderer, Kalligraphie HUD. */
 private suspend fun renderCornellFrames(
-    gpu: org.graphiks.dawn4k.toolkit.DawnSession,
+    gpu: ToolkitSessionView,
     presentation: DawnPresentation,
     controls: OrbitControls,
 ) {
@@ -146,5 +152,5 @@ private suspend fun renderCornellFrames(
     }
 }
 
-private fun org.graphiks.dawn4k.toolkit.surface.DawnFrame.toFrame() =
+private fun DawnFrame.toFrame() =
     org.graphiks.hellodawn4k.Frame(view, extent.width, extent.height)

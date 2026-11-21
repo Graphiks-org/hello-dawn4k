@@ -3,8 +3,8 @@ package org.graphiks.hellodawn4k
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import org.graphiks.dawn4k.toolkit.DawnSession
-import org.graphiks.dawn4k.toolkit.surface.DawnPresentation
+import org.graphiks.dawn4k.webgpu.toolkit.interop.ToolkitSessionView
+import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnPresentation
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -26,7 +26,7 @@ interface CornellHostState {
  * flag, renders and presents one Dawn frame at a time, tracks an EMA of the frame
  * time and refreshes the status overlay at 2 Hz, then drains the GPU on exit.
  */
-suspend fun DawnSession.runCornellLoop(
+suspend fun ToolkitSessionView.runCornellLoop(
     presentation: DawnPresentation,
     state: CornellHostState,
     overlay: GlyphOverlay? = null,

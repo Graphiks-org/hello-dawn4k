@@ -35,9 +35,9 @@ kotlin {
             dependencies {
                 // dawn4k does not ship wasmJs: common code depends only on the portable
                 // WebGPU contracts; the native targets add Dawn through their own source sets.
-                api("org.graphiks:webgpu-api:0.1.0-SNAPSHOT")
+                api("org.graphiks.webgpu:api:0.1.0-SNAPSHOT")
                 // dawn4k exposes webgpu-descriptors only as an implementation dependency, so consumers redeclare it.
-                api("org.graphiks:webgpu-descriptors:0.1.0-SNAPSHOT")
+                api("org.graphiks.webgpu:descriptors:0.1.0-SNAPSHOT")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
                 // The glyph chain (shaping, layout, CPU rasterization) is common to every
                 // host: Kalligraphie publishes JVM, Android, iOS and wasm-js variants under
@@ -52,27 +52,24 @@ kotlin {
         }
         val jvmMain by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-glfw:1.0.0-SNAPSHOT")
+                // One toolkit module (org.graphiks.webgpu:dawn4k-webgpu-toolkit) replaces the
+                // three legacy dawn4k-toolkit-core/surface/glfw modules, folded into it.
+                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
             }
         }
         val androidMain by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
             }
         }
         val iosArm64Main by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
             }
         }
         val iosSimulatorArm64Main by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
             }
         }
         // The Dawn-backed mobile hosts (Android + iOS) share the render loop here.
@@ -82,8 +79,7 @@ kotlin {
         iosArm64Main.dependsOn(mobileMain)
         iosSimulatorArm64Main.dependsOn(mobileMain)
         mobileMain.dependencies {
-            implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-            implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+            implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
         }
         // The two iOS targets share the UIKit host controller in iosMain, over the
         // shared mobile loop. The default hierarchy template is off (explicit edges
@@ -96,13 +92,17 @@ kotlin {
         val wasmJsMain by getting {
             dependencies {
                 // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
-                implementation("org.graphiks:webgpu-browser:0.1.0-SNAPSHOT")
+                implementation("org.graphiks.webgpu:browser:0.1.0-SNAPSHOT")
                 implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
             }
         }
         val jvmTest by getting {
             dependencies {
                 implementation(kotlin("test"))
+                // DawnToolkitInterop.withDawnSession takes the toolkit's SessionConfig, published
+                // by toolkit-core; dawn4k-webgpu-toolkit exposes it only as an implementation
+                // dependency, so the consumer redeclares it (like dawn4k-toolkit-examples does).
+                implementation("org.graphiks.webgpu:toolkit-core:0.1.0-SNAPSHOT")
             }
         }
         val iosSimulatorArm64Test by getting {

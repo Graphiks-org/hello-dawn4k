@@ -1,9 +1,7 @@
 package org.graphiks.hellodawn4k
 
 import kotlinx.coroutines.runBlocking
-import org.graphiks.dawn4k.toolkit.DawnSession
-import org.graphiks.dawn4k.toolkit.DawnSessionOptions
-import org.graphiks.dawn4k.toolkit.withDawnSession
+import org.graphiks.dawn4k.webgpu.toolkit.interop.ToolkitSessionView
 import org.graphiks.webgpu.ArrayBuffer
 import org.graphiks.webgpu.GPUBufferUsage
 import org.graphiks.webgpu.GPUMapMode
@@ -14,6 +12,8 @@ import org.graphiks.webgpu.descriptors.Extent3D
 import org.graphiks.webgpu.descriptors.TexelCopyBufferInfo
 import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
 import org.graphiks.webgpu.descriptors.TextureDescriptor
+import org.graphiks.webgpu.toolkit.SessionConfig
+import org.graphiks.dawn4k.webgpu.toolkit.interop.DawnToolkitInterop
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -30,12 +30,12 @@ object HeadlessCornell {
     class Result(val photonsEmitted: Double, val rgba: ByteArray)
 
     fun render(frames: Int, seed: Long, mode: RenderMode): Result = runBlocking {
-        withDawnSession(DawnSessionOptions(startupTimeout = 60.seconds)) { session ->
-            renderInSession(session, frames, seed, mode)
+        DawnToolkitInterop.withDawnSession(SessionConfig(startupTimeout = 60.seconds)) { session ->
+            session.run { renderInSession(session, frames, seed, mode) }
         }
     }
 
-    internal suspend fun renderInSession(session: DawnSession, frames: Int, seed: Long, mode: RenderMode): Result {
+    internal suspend fun renderInSession(session: ToolkitSessionView, frames: Int, seed: Long, mode: RenderMode): Result {
         val renderer = CornellRenderer(
             session.device, session.queue, GPUTextureFormat.RGBA8Unorm, kotlin.random.Random(seed),
         )
