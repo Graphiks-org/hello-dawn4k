@@ -35,41 +35,41 @@ kotlin {
             dependencies {
                 // dawn4k does not ship wasmJs: common code depends only on the portable
                 // WebGPU contracts; the native targets add Dawn through their own source sets.
-                api("org.graphiks.webgpu:api:0.1.0-SNAPSHOT")
+                api(libs.webgpu.api)
                 // dawn4k exposes webgpu-descriptors only as an implementation dependency, so consumers redeclare it.
-                api("org.graphiks.webgpu:descriptors:0.1.0-SNAPSHOT")
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+                api(libs.webgpu.descriptors)
+                implementation(libs.kotlinx.coroutines.core)
                 // The glyph chain (shaping, layout, CPU rasterization) is common to every
                 // host: Kalligraphie publishes JVM, Android, iOS and wasm-js variants under
                 // org.graphiks.kalligraphie, one valid AGP namespace per module. The umbrella
                 // POM declares the leaves runtime-only, so consumers redeclare them.
-                api("org.graphiks.kalligraphie:kalligraphie:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:api:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:shaping:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:layout:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:raster-cpu:1.0.0-SNAPSHOT")
+                api(libs.kalligraphie)
+                implementation(libs.kalligraphie.api)
+                implementation(libs.kalligraphie.shaping)
+                implementation(libs.kalligraphie.layout)
+                implementation(libs.kalligraphie.raster.cpu)
             }
         }
         val jvmMain by getting {
             dependencies {
                 // One toolkit module (org.graphiks.webgpu:dawn4k-webgpu-toolkit) replaces the
                 // three legacy dawn4k-toolkit-core/surface/glfw modules, folded into it.
-                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         val androidMain by getting {
             dependencies {
-                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         val iosArm64Main by getting {
             dependencies {
-                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         val iosSimulatorArm64Main by getting {
             dependencies {
-                implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         // The Dawn-backed mobile hosts (Android + iOS) share the render loop here.
@@ -79,7 +79,7 @@ kotlin {
         iosArm64Main.dependsOn(mobileMain)
         iosSimulatorArm64Main.dependsOn(mobileMain)
         mobileMain.dependencies {
-            implementation("org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT")
+            implementation(libs.dawn4k.webgpu.toolkit)
         }
         // The two iOS targets share the UIKit host controller in iosMain, over the
         // shared mobile loop. The default hierarchy template is off (explicit edges
@@ -92,15 +92,15 @@ kotlin {
         val wasmJsMain by getting {
             dependencies {
                 // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
-                implementation("org.graphiks.webgpu:browser:0.1.0-SNAPSHOT")
+                implementation(libs.webgpu.browser)
                 // Toolkit session/surface over the browser implementation: webToolkit(),
                 // CanvasSurfaceTarget (toolkit-web), withSurface/PresentationPolicy/Frame
                 // (toolkit-surface), AdapterHints/SessionConfig (toolkit-core, redeclared —
                 // the toolkit modules expose them only as implementation dependencies).
-                implementation("org.graphiks.webgpu:toolkit-web:0.1.0-SNAPSHOT")
-                implementation("org.graphiks.webgpu:toolkit-surface:0.1.0-SNAPSHOT")
-                implementation("org.graphiks.webgpu:toolkit-core:0.1.0-SNAPSHOT")
-                implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
+                implementation(libs.webgpu.toolkit.web)
+                implementation(libs.webgpu.toolkit.surface)
+                implementation(libs.webgpu.toolkit.core)
+                implementation(libs.kotlinx.browser)
             }
         }
         val jvmTest by getting {
@@ -109,7 +109,7 @@ kotlin {
                 // DawnToolkitInterop.withDawnSession takes the toolkit's SessionConfig, published
                 // by toolkit-core; dawn4k-webgpu-toolkit exposes it only as an implementation
                 // dependency, so the consumer redeclares it (like dawn4k-toolkit-examples does).
-                implementation("org.graphiks.webgpu:toolkit-core:0.1.0-SNAPSHOT")
+                implementation(libs.webgpu.toolkit.core)
             }
         }
         val iosSimulatorArm64Test by getting {
@@ -144,7 +144,7 @@ tasks.register<JavaExec>("runWindow") {
 // does not extract klib-root .mjs files, so the bundle cannot resolve them. Extract
 // them next to the generated package before webpack runs (both variants).
 val kffiHarfbuzzKlib = configurations.detachedConfiguration(
-    dependencies.create("org.graphiks:kffi-harfbuzz-wasm-js:1.0.0-SNAPSHOT"),
+    dependencies.create("org.graphiks:kffi-harfbuzz-wasm-js:${libs.versions.kffi.get()}"),
 )
 val extractKffiHarfbuzzGlue by tasks.registering(Copy::class) {
     val klibFile = provider { kffiHarfbuzzKlib.files.first { it.name.endsWith(".klib") } }
