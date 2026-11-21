@@ -93,6 +93,13 @@ kotlin {
             dependencies {
                 // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
                 implementation("org.graphiks.webgpu:browser:0.1.0-SNAPSHOT")
+                // Toolkit session/surface over the browser implementation: webToolkit(),
+                // CanvasSurfaceTarget (toolkit-web), withSurface/PresentationPolicy/Frame
+                // (toolkit-surface), AdapterHints/SessionConfig (toolkit-core, redeclared —
+                // the toolkit modules expose them only as implementation dependencies).
+                implementation("org.graphiks.webgpu:toolkit-web:0.1.0-SNAPSHOT")
+                implementation("org.graphiks.webgpu:toolkit-surface:0.1.0-SNAPSHOT")
+                implementation("org.graphiks.webgpu:toolkit-core:0.1.0-SNAPSHOT")
                 implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
             }
         }
