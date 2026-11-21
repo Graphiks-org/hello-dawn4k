@@ -1,7 +1,13 @@
 # Version catalog — every external library the project consumes is declared here.
 # WebGPU/dawn4k/Kalligraphie publish snapshots on the GraphiksSnapshots repository
-# (see settings.gradle.kts); kffi-harfbuzz-wasm-js still lives under the legacy
-# org.graphiks group on the same snapshot repository.
+# (see settings.gradle.kts) under their own groups.
+#
+# Group exception, on purpose: kffi-harfbuzz-wasm-js was never republished after the
+# Maven group normalization. The other kffi modules moved to org.graphiks.kffi (0.1.0,
+# Maven Central), but this artifact only exists as org.graphiks:kffi-harfbuzz-wasm-js
+# on the snapshot repository — the org.graphiks.kffi and org.graphiks.kalligraphie
+# paths return 404 for it (checked 21/11/2026). Keep the legacy group until kffi
+# publishes it elsewhere, then update this alias.
 
 [versions]
 webgpu = "0.1.0-SNAPSHOT"
