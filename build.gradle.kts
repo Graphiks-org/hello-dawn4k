@@ -144,7 +144,7 @@ tasks.register<JavaExec>("runWindow") {
 // does not extract klib-root .mjs files, so the bundle cannot resolve them. Extract
 // them next to the generated package before webpack runs (both variants).
 val kffiHarfbuzzKlib = configurations.detachedConfiguration(
-    dependencies.create("org.graphiks:kffi-harfbuzz-wasm-js:${libs.versions.kffi.get()}"),
+    dependencies.create(libs.kffi.harfbuzz.wasm.js.get()),
 )
 val extractKffiHarfbuzzGlue by tasks.registering(Copy::class) {
     val klibFile = provider { kffiHarfbuzzKlib.files.first { it.name.endsWith(".klib") } }

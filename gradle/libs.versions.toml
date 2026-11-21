@@ -1,19 +1,15 @@
 # Version catalog — every external library the project consumes is declared here.
 # WebGPU/dawn4k/Kalligraphie publish snapshots on the GraphiksSnapshots repository
-# (see settings.gradle.kts) under their own groups.
-#
-# Group exception, on purpose: kffi-harfbuzz-wasm-js was never republished after the
-# Maven group normalization. The other kffi modules moved to org.graphiks.kffi (0.1.0,
-# Maven Central), but this artifact only exists as org.graphiks:kffi-harfbuzz-wasm-js
-# on the snapshot repository — the org.graphiks.kffi and org.graphiks.kalligraphie
-# paths return 404 for it (checked 21/11/2026). Keep the legacy group until kffi
-# publishes it elsewhere, then update this alias.
+# (see settings.gradle.kts) under their own groups. The kffi HarfBuzz wasm bridge is
+# a Maven Central release: org.graphiks.kffi:harfbuzz-wasm-js 0.1.0 — the same version
+# Kalligraphie pulls transitively, and its .klib ships the kffi-harfbuzz-web.mjs /
+# hb.mjs loaders the wasm build extracts next to the bundle.
 
 [versions]
 webgpu = "0.1.0-SNAPSHOT"
 dawn4k = "1.0.0-SNAPSHOT"
 kalligraphie = "1.0.0-SNAPSHOT"
-kffi = "1.0.0-SNAPSHOT"
+kffi = "0.1.0"
 kotlinxCoroutines = "1.11.0"
 kotlinxBrowser = "0.3"
 
@@ -30,7 +26,7 @@ kalligraphie-api = { module = "org.graphiks.kalligraphie:api", version.ref = "ka
 kalligraphie-shaping = { module = "org.graphiks.kalligraphie:shaping", version.ref = "kalligraphie" }
 kalligraphie-layout = { module = "org.graphiks.kalligraphie:layout", version.ref = "kalligraphie" }
 kalligraphie-raster-cpu = { module = "org.graphiks.kalligraphie:raster-cpu", version.ref = "kalligraphie" }
-kffi-harfbuzz-wasm-js = { module = "org.graphiks:kffi-harfbuzz-wasm-js", version.ref = "kffi" }
+kffi-harfbuzz-wasm-js = { module = "org.graphiks.kffi:harfbuzz-wasm-js", version.ref = "kffi" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
 kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.ref = "kotlinxBrowser" }
