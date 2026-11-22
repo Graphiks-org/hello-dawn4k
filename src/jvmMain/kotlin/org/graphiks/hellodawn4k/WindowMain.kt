@@ -8,14 +8,15 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.graphiks.dawn4k.webgpu.toolkit.Dawn4kWebGpuToolkitExtension
 import org.graphiks.dawn4k.webgpu.toolkit.DawnSessionOptions
 import org.graphiks.dawn4k.webgpu.toolkit.glfw.DawnWindow
 import org.graphiks.dawn4k.webgpu.toolkit.glfw.DawnWindowEvent
 import org.graphiks.dawn4k.webgpu.toolkit.glfw.DawnWindowOptions
 import org.graphiks.dawn4k.webgpu.toolkit.glfw.withDawnWindow
-import org.graphiks.dawn4k.webgpu.toolkit.interop.ToolkitSessionView
 import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnFrame
 import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnPresentation
+import org.graphiks.webgpu.toolkit.Session
 import kotlin.time.Duration.Companion.seconds
 
 // GLFW constants forwarded as-is by the toolkit's window events.
@@ -32,19 +33,22 @@ private const val GLFW_KEY_ESCAPE = 256
  * views; drag orbits, the wheel zooms, R resets, Escape closes.
  *
  * The top-level glfw.withDawnWindow is the dawn4k-native path (DawnMainThreadLoop):
- * it owns the main-loop pump and already runs the block on the session's execution
- * owner — the interop facade's WindowHost path is not usable for this today.
+ * it owns the main-loop pump and already runs the block admitted on the session's
+ * execution owner; the block receives the canonical toolkit Session (dawn4k #12) and
+ * the extension resolves the dawn-typed handles (the HUD adapter name).
  */
 fun main() = runBlocking {
     val camera = OrbitCamera()
+    val extension = Dawn4kWebGpuToolkitExtension()
     withDawnWindow(
         windowOptions = DawnWindowOptions(title = "hello-dawn4k — Cornell box", width = 960, height = 720),
         sessionOptions = DawnSessionOptions(startupTimeout = 60.seconds),
+        extension = extension,
     ) { gpu, window, presentation ->
         val controls = OrbitControls(window, camera)
         val watcher = launch { controls.collect() }
         try {
-            renderCornellFrames(gpu, presentation, controls)
+            renderCornellFrames(extension, gpu, presentation, controls)
         } finally {
             watcher.cancelAndJoin()
         }
@@ -95,7 +99,8 @@ private class OrbitControls(private val window: DawnWindow, val camera: OrbitCam
 
 /** The desktop render loop: shared renderer, Kalligraphie HUD. */
 private suspend fun renderCornellFrames(
-    gpu: ToolkitSessionView,
+    extension: Dawn4kWebGpuToolkitExtension,
+    gpu: Session,
     presentation: DawnPresentation,
     controls: OrbitControls,
 ) {
@@ -103,7 +108,7 @@ private suspend fun renderCornellFrames(
         gpu.device, gpu.queue, checkNotNull(presentation.configuration.value).format,
     )
     val overlay = GlyphOverlay(gpu.device, gpu.queue, renderer.format)
-    val adapterName = gpu.adapter.info.description
+    val adapterName = extension.dawnAdapter(gpu).info.description
     var mode = RenderMode.RASTERIZER
     var emaFrameMs = 16.0
     var lastHudAt = System.nanoTime()

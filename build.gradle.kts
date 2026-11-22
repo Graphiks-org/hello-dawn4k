@@ -106,10 +106,8 @@ kotlin {
         val jvmTest by getting {
             dependencies {
                 implementation(kotlin("test"))
-                // DawnToolkitInterop.withDawnSession takes the toolkit's SessionConfig, published
-                // by toolkit-core; dawn4k-webgpu-toolkit exposes it only as an implementation
-                // dependency, so the consumer redeclares it (like dawn4k-toolkit-examples does).
-                implementation(libs.webgpu.toolkit.core)
+                // SessionConfig/Session/openDawnSession resolve transitively: dawn4k-webgpu-toolkit
+                // publishes the toolkit contracts as api since dawn4k #12.
             }
         }
         val iosSimulatorArm64Test by getting {
