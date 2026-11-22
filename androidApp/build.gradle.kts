@@ -28,9 +28,8 @@ kotlin {
 
 dependencies {
     implementation(project(":"))
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    // The library's androidMain holds dawn4k as implementation-only; a host app that
-    // touches DawnSurfaceView directly must redeclare it (like the library's own hosts).
-    implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-    implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+    implementation(libs.kotlinx.coroutines.android)
+    // The library's androidMain holds the Dawn toolkit as implementation-only; a host app
+    // that touches DawnSurfaceView directly must redeclare it (like the library's own hosts).
+    implementation(libs.dawn4k.webgpu.toolkit)
 }

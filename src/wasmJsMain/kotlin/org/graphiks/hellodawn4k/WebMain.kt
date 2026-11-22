@@ -4,15 +4,16 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.graphiks.webgpu.GPUPowerPreference
-import org.graphiks.webgpu.GPUTextureView
-import org.graphiks.webgpu.browser.CanvasSurface
 import org.graphiks.webgpu.browser.HTMLCanvasElement as GpuCanvasElement
-import org.graphiks.webgpu.browser.SurfaceConfiguration
-import org.graphiks.webgpu.browser.getCanvasSurface
-import org.graphiks.webgpu.browser.requestAdapter
-import org.graphiks.webgpu.descriptors.RequestAdapterOptions
+import org.graphiks.webgpu.toolkit.AdapterHints
+import org.graphiks.webgpu.toolkit.surface.withSurface
+import org.graphiks.webgpu.toolkit.web.CanvasSurfaceTarget
+import org.graphiks.webgpu.toolkit.web.webToolkit
 import org.w3c.dom.HTMLButtonElement
 import org.w3c.dom.HTMLCanvasElement
 import org.w3c.dom.HTMLDivElement
@@ -22,57 +23,40 @@ import org.w3c.dom.events.MouseEvent
 import org.w3c.dom.events.WheelEvent
 import kotlin.js.unsafeCast
 
-/**
- * Web host, all Kotlin over the browser's native WebGPU (webgpu-browser wraps navigator.gpu
- * behind the same GPUDevice/GPUQueue interfaces the native targets use through Dawn).
- * Drag orbits, wheel zoom, M/button toggles mode, R resets. Two views of the same canvas:
- * the DOM element (layout, events) and the GPU-facing external interface (context).
- */
 private val scope: CoroutineScope = MainScope()
 private val camera = OrbitCamera()
 private var mode = RenderMode.RASTERIZER
+private var statusText = ""
 
+/**
+ * Web host, all Kotlin over the toolkit's web extension: `webToolkit()` fronts the browser's
+ * native WebGPU and the canvas is a `CanvasSurfaceTarget` presented through the same
+ * session/surface model the native hosts use through Dawn. Drag orbits, wheel zoom, M/button
+ * toggles mode, R resets. The DOM keeps layout, controls (the mode button) and the fallback
+ * card; the HUD stays the shared Kalligraphie glyph chain.
+ */
 fun main() {
     scope.launch {
-        val adapter = requestAdapter(
-            RequestAdapterOptions(powerPreference = GPUPowerPreference.HighPerformance),
-        ).getOrElse { failure -> fatal("No WebGPU adapter: $failure") }
-        val device = adapter.requestDevice().getOrElse { failure -> fatal("Device request rejected: $failure") }
-
         val domCanvas = document.getElementById("canvas") as? HTMLCanvasElement
             ?: return@launch fatal("missing canvas element")
-        val surface: CanvasSurface = domCanvas.unsafeCast<GpuCanvasElement>().getCanvasSurface()
-        val format = surface.preferredCanvasFormat
-            ?: return@launch fatal("The browser exposes no preferred canvas format.")
-        surface.configure(SurfaceConfiguration(device = device, format = format))
-
-        val renderer = CornellRenderer(device, device.queue, format)
-        val modeButton = document.getElementById("mode") as? HTMLButtonElement ?: return@launch
-
-        // The status overlay is drawn by the shared Kalligraphie glyph chain, like every
-        // other target; the DOM keeps only controls (the mode button) and the fallback card.
+        val modeButton = document.getElementById("mode") as? HTMLButtonElement
+            ?: return@launch
         // On web the HarfBuzz wasm module instantiates asynchronously: await the runtime
-        // before opening any facade (a no-op on JVM and iOS). The canvas backing store is
-        // CSS size × devicePixelRatio, so the overlay takes that ratio as its scale to
-        // keep the HUD's on-screen size; browser zoom can change it, hence the rebuild.
+        // before opening any facade (a no-op on JVM and iOS).
         org.graphiks.kalligraphie.initialize()
-        var hudScale = window.devicePixelRatio.toFloat()
-        var overlay = GlyphOverlay(device, device.queue, format, scale = hudScale)
-        var statusText = ""
 
+        // DOM controls stay outside the toolkit: mode button, keyboard, pointer orbit.
         fun toggleMode() {
             mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
             modeButton.textContent = "Mode: ${if (mode == RenderMode.RASTERIZER) "rasterizer" else "raytracer"} (M)"
         }
         modeButton.onclick = { toggleMode() }
         document.onkeydown = { event: Event ->
-            val key = event.unsafeCast<KeyboardEvent>().key.lowercase()
-            when (key) {
+            when (event.unsafeCast<KeyboardEvent>().key.lowercase()) {
                 "m" -> toggleMode()
                 "r" -> camera.reset()
             }
         }
-
         var dragging = false
         var lastX = 0.0
         var lastY = 0.0
@@ -95,47 +79,115 @@ fun main() {
             camera.zoomRatio(kotlin.math.exp(-wheel.deltaY * 0.001))
         })
 
-        var lastStatusAt = -1.0
-        var lastFrameAt = -1.0
-        var emaFrameMs = 16.0
+        val target = CanvasSurfaceTarget(domCanvas.unsafeCast<GpuCanvasElement>())
 
-        fun tick() {
-            val ratio = window.devicePixelRatio
-            val width = (domCanvas.clientWidth * ratio).toInt().coerceAtLeast(1)
-            val height = (domCanvas.clientHeight * ratio).toInt().coerceAtLeast(1)
-            if (domCanvas.width != width || domCanvas.height != height) {
-                domCanvas.width = width
-                domCanvas.height = height
+        var firstPass = true
+        var consecutiveFailures = 0
+        while (currentCoroutineContext().isActive) {
+            try {
+                runSurfacePass(target, domCanvas)
+                firstPass = false
+                consecutiveFailures = 0
+            } catch (failure: Throwable) {
+                consecutiveFailures++
+                if (firstPass) {
+                    // The first pass owns the fallback card: no adapter, no WebGPU at all.
+                    fatal("No WebGPU: $failure")
+                } else if (consecutiveFailures >= 3) {
+                    // A device lost mid-session or a persistent negotiation failure must not
+                    // rot into a silent black canvas — surface the last reason.
+                    fatal("WebGPU keeps failing: $failure")
+                }
             }
-            if (ratio.toFloat() != hudScale) {
-                hudScale = ratio.toFloat()
-                overlay.close()
-                overlay = GlyphOverlay(device, device.queue, format, scale = hudScale)
-                if (statusText.isNotEmpty()) overlay.update(statusText)
-            }
-            // The raytracer reads the camera uniform; the web host must keep it fresh.
-            renderer.updateCamera(camera.basis())
-            val texture = surface.getCurrentTexture()
-            val view: GPUTextureView = texture.texture.createView()
-            renderer.renderFrame(Frame(view, width, height), mode, camera) { encoder, frame ->
-                overlay.draw(encoder, frame)
-            }
-            renderer.consumeResize()
-
-            val now = window.performance.now()
-            if (lastFrameAt >= 0.0) {
-                emaFrameMs = emaFrameMs * 0.9 + (now - lastFrameAt) * 0.1
-            }
-            lastFrameAt = now
-            if (now - lastStatusAt > 500 || lastStatusAt < 0.0) {
-                lastStatusAt = now
-                statusText = statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
-                    .joinToString("\n")
-                overlay.update(statusText)
-            }
-            window.requestAnimationFrame { tick() }
+            // A canvas resize bumps the target generation and toolkit-web v1 kills the
+            // leased surface, so every resize ends in a fresh withSurface pass (new session
+            // and device, renderer rebuilt). The debounce keeps a drag-resize from
+            // rebuilding the renderer in a burst; one stale-surface failure retries
+            // silently, three in a row fall back to the card.
+            delay(150)
         }
-        tick()
+    }
+}
+
+/**
+ * One toolkit surface pass: a session over the browser implementation, the canvas surface
+ * negotiated from what it advertises, frames presented through the surface. A canvas resize
+ * moves the target to a new generation, which kills the leased surface (toolkit-web v1), so
+ * this function returns and the main loop re-bails after the debounce. Failures propagate to
+ * the main loop, which owns the fallback policy.
+ */
+private suspend fun runSurfacePass(target: CanvasSurfaceTarget, domCanvas: HTMLCanvasElement) {
+    withSurface(
+        extension = webToolkit(),
+        target = target,
+        hints = AdapterHints(powerPreference = GPUPowerPreference.HighPerformance),
+    ) { session, surface ->
+        val format = checkNotNull(surface.configuration.value).format
+        // The canvas backing store is CSS size × devicePixelRatio, so the overlay takes
+        // that ratio as its scale to keep the HUD's on-screen size; browser zoom can
+        // change it, hence the rebuild. The generation check below catches the backing
+        // store change a dPR bump causes, ending this pass on the new generation.
+        var hudScale = window.devicePixelRatio.toFloat()
+        val renderer = CornellRenderer(session.device, session.device.queue, format)
+        var overlay = GlyphOverlay(session.device, session.device.queue, format, scale = hudScale)
+        if (statusText.isNotEmpty()) overlay.update(statusText)
+        val generation = target.state.value.generation
+        var emaFrameMs = 16.0
+        var lastFrameAt = -1.0
+        var lastStatusAt = -1.0
+        try {
+            while (currentCoroutineContext().isActive) {
+                // Pull fallback for browsers without ResizeObserver: every state read
+                // refreshes the published extent, so this check sees resizes too.
+                if (target.state.value.generation != generation) return@withSurface
+                resizeCanvasBackingStore(domCanvas)
+                val ratio = window.devicePixelRatio.toFloat()
+                if (ratio != hudScale) {
+                    hudScale = ratio
+                    overlay.close()
+                    overlay = GlyphOverlay(session.device, session.device.queue, format, scale = hudScale)
+                    if (statusText.isNotEmpty()) overlay.update(statusText)
+                }
+                // The raytracer reads the camera uniform; the web host must keep it fresh.
+                renderer.updateCamera(camera.basis())
+                val frameStartedAt = window.performance.now()
+                surface.withFrame { frame ->
+                    renderer.renderFrame(
+                        Frame(frame.view, frame.extent.width.toInt(), frame.extent.height.toInt()),
+                        mode, camera,
+                    ) { encoder, rendered -> overlay.draw(encoder, rendered) }
+                    frame.present()
+                }
+                renderer.consumeResize()
+
+                val now = window.performance.now()
+                if (lastFrameAt >= 0.0) {
+                    emaFrameMs = emaFrameMs * 0.9 + (now - lastFrameAt) * 0.1
+                }
+                lastFrameAt = now
+                if (now - lastStatusAt > 500 || lastStatusAt < 0.0) {
+                    lastStatusAt = now
+                    statusText = statusLines((1000.0 / emaFrameMs).toInt(), renderer, mode, camera)
+                        .joinToString("\n")
+                    overlay.update(statusText)
+                }
+                delay(16)
+            }
+        } finally {
+            renderer.close()
+            overlay.close()
+        }
+    }
+}
+
+/** Canvas backing store = CSS size × devicePixelRatio (sharpness on dense displays). */
+private fun resizeCanvasBackingStore(domCanvas: HTMLCanvasElement) {
+    val ratio = window.devicePixelRatio
+    val width = (domCanvas.clientWidth * ratio).toInt().coerceAtLeast(1)
+    val height = (domCanvas.clientHeight * ratio).toInt().coerceAtLeast(1)
+    if (domCanvas.width != width || domCanvas.height != height) {
+        domCanvas.width = width
+        domCanvas.height = height
     }
 }
 

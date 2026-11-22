@@ -1,8 +1,6 @@
 package org.graphiks.hellodawn4k
 
 import kotlinx.coroutines.runBlocking
-import org.graphiks.dawn4k.toolkit.DawnSessionOptions
-import org.graphiks.dawn4k.toolkit.withDawnSession
 import org.graphiks.webgpu.GPULoadOp
 import org.graphiks.webgpu.GPUStoreOp
 import org.graphiks.webgpu.GPUTextureFormat
@@ -18,7 +16,6 @@ import org.graphiks.webgpu.descriptors.TexelCopyBufferInfo
 import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Exercises the whole shared glyph chain headlessly from the embedded font bytes — the
@@ -29,7 +26,9 @@ import kotlin.time.Duration.Companion.seconds
 class GlyphChainTest {
     @Test
     fun shapedTextRasterizesAndBlendsOverTheTarget() = runBlocking {
-        withDawnSession(DawnSessionOptions(startupTimeout = 60.seconds)) { session ->
+        withDawnSession { session ->
+            // Native GPU calls must run on the session's execution owner: the extension
+            // creates the Dawn context on a dedicated thread — withDawnSession dispatches there.
             val hudText = HudText.openEmbedded(LIBERATION_SANS_TTF)
             assertTrue(hudText != null, "embedded font catalog should open")
             hudText!!.use { text ->

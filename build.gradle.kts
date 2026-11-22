@@ -35,44 +35,41 @@ kotlin {
             dependencies {
                 // dawn4k does not ship wasmJs: common code depends only on the portable
                 // WebGPU contracts; the native targets add Dawn through their own source sets.
-                api("org.graphiks:webgpu-api:0.1.0-SNAPSHOT")
+                api(libs.webgpu.api)
                 // dawn4k exposes webgpu-descriptors only as an implementation dependency, so consumers redeclare it.
-                api("org.graphiks:webgpu-descriptors:0.1.0-SNAPSHOT")
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+                api(libs.webgpu.descriptors)
+                implementation(libs.kotlinx.coroutines.core)
                 // The glyph chain (shaping, layout, CPU rasterization) is common to every
                 // host: Kalligraphie publishes JVM, Android, iOS and wasm-js variants under
                 // org.graphiks.kalligraphie, one valid AGP namespace per module. The umbrella
                 // POM declares the leaves runtime-only, so consumers redeclare them.
-                api("org.graphiks.kalligraphie:kalligraphie:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:api:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:shaping:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:layout:1.0.0-SNAPSHOT")
-                implementation("org.graphiks.kalligraphie:raster-cpu:1.0.0-SNAPSHOT")
+                api(libs.kalligraphie)
+                implementation(libs.kalligraphie.api)
+                implementation(libs.kalligraphie.shaping)
+                implementation(libs.kalligraphie.layout)
+                implementation(libs.kalligraphie.raster.cpu)
             }
         }
         val jvmMain by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-glfw:1.0.0-SNAPSHOT")
+                // The whole Dawn toolkit in one module: session, window/surface targets,
+                // the glfw host and the dawn-typed handles.
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         val androidMain by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         val iosArm64Main by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         val iosSimulatorArm64Main by getting {
             dependencies {
-                implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-                implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+                implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
         // The Dawn-backed mobile hosts (Android + iOS) share the render loop here.
@@ -82,8 +79,7 @@ kotlin {
         iosArm64Main.dependsOn(mobileMain)
         iosSimulatorArm64Main.dependsOn(mobileMain)
         mobileMain.dependencies {
-            implementation("org.graphiks:dawn4k-toolkit-core:1.0.0-SNAPSHOT")
-            implementation("org.graphiks:dawn4k-toolkit-surface:1.0.0-SNAPSHOT")
+            implementation(libs.dawn4k.webgpu.toolkit)
         }
         // The two iOS targets share the UIKit host controller in iosMain, over the
         // shared mobile loop. The default hierarchy template is off (explicit edges
@@ -96,13 +92,22 @@ kotlin {
         val wasmJsMain by getting {
             dependencies {
                 // The browser's native WebGPU behind the same GPUDevice/GPUQueue interfaces.
-                implementation("org.graphiks:webgpu-browser:0.1.0-SNAPSHOT")
-                implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
+                implementation(libs.webgpu.browser)
+                // Toolkit session/surface over the browser implementation: webToolkit(),
+                // CanvasSurfaceTarget (toolkit-web), withSurface/PresentationPolicy/Frame
+                // (toolkit-surface), AdapterHints/SessionConfig (toolkit-core, redeclared —
+                // the toolkit modules expose them only as implementation dependencies).
+                implementation(libs.webgpu.toolkit.web)
+                implementation(libs.webgpu.toolkit.surface)
+                implementation(libs.webgpu.toolkit.core)
+                implementation(libs.kotlinx.browser)
             }
         }
         val jvmTest by getting {
             dependencies {
                 implementation(kotlin("test"))
+                // SessionConfig/Session/openDawnSession come through the toolkit module: it
+                // publishes the toolkit contracts as api.
             }
         }
         val iosSimulatorArm64Test by getting {
@@ -137,7 +142,7 @@ tasks.register<JavaExec>("runWindow") {
 // does not extract klib-root .mjs files, so the bundle cannot resolve them. Extract
 // them next to the generated package before webpack runs (both variants).
 val kffiHarfbuzzKlib = configurations.detachedConfiguration(
-    dependencies.create("org.graphiks:kffi-harfbuzz-wasm-js:1.0.0-SNAPSHOT"),
+    dependencies.create(libs.kffi.harfbuzz.wasm.js.get()),
 )
 val extractKffiHarfbuzzGlue by tasks.registering(Copy::class) {
     val klibFile = provider { kffiHarfbuzzKlib.files.first { it.name.endsWith(".klib") } }
@@ -145,6 +150,9 @@ val extractKffiHarfbuzzGlue by tasks.registering(Copy::class) {
     include("*.mjs")
     into(layout.buildDirectory.dir("wasm/packages/${project.name}/kotlin"))
 }
+// The Kotlin compile regenerates the package directory the glue is copied into — run the
+// copy after it, or a recompile wipes the .mjs files out from under webpack (flake seen).
+extractKffiHarfbuzzGlue.configure { dependsOn(tasks.named("compileKotlinWasmJs")) }
 listOf("wasmJsBrowserDevelopmentWebpack", "wasmJsBrowserProductionWebpack").forEach { name ->
     tasks.matching { it.name == name }.configureEach { dependsOn(extractKffiHarfbuzzGlue) }
 }

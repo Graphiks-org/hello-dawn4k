@@ -1,8 +1,6 @@
 package org.graphiks.hellodawn4k
 
 import kotlinx.coroutines.runBlocking
-import org.graphiks.dawn4k.toolkit.DawnSessionOptions
-import org.graphiks.dawn4k.toolkit.withDawnSession
 import org.graphiks.webgpu.GPULoadOp
 import org.graphiks.webgpu.GPUStoreOp
 import org.graphiks.webgpu.GPUTextureFormat
@@ -20,7 +18,6 @@ import org.graphiks.webgpu.descriptors.TexelCopyTextureInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The HUD must keep its on-screen size across hosts: the glyph chain works in
@@ -54,7 +51,7 @@ class GlyphOverlayScaleTest {
 
     @Test
     fun xxxhdpiStatusTextPlacesEveryGlyph() = runBlocking {
-        withDawnSession(DawnSessionOptions(startupTimeout = 60.seconds)) { session ->
+        withDawnSession { session ->
             val statusText = listOf("60 fps · 0M photons · rasterizer", "az 0°  el 6°  zoom 3.1")
             // Densities up to 4x (Android xxxhdpi) quadruple the font pixels; the
             // atlas must still hold the whole two-line status without dropping a glyph.
@@ -74,7 +71,7 @@ class GlyphOverlayScaleTest {
 
     /** Draws one "8" through a [GlyphOverlay] at [scale] and returns the first lit pixel (column, row). */
     private suspend fun checkOverlayOrigin(scale: Float): Pair<Int, Int> = runBlocking {
-        withDawnSession(DawnSessionOptions(startupTimeout = 60.seconds)) { session ->
+        withDawnSession { session ->
             session.device.createTexture(
                 TextureDescriptor(
                     size = Extent3D(width.toUInt(), height.toUInt()),

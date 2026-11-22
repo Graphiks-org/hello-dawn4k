@@ -9,8 +9,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
-import org.graphiks.dawn4k.toolkit.surface.DawnMetalView
-import org.graphiks.dawn4k.toolkit.surface.withDawnSurface
+import org.graphiks.dawn4k.webgpu.toolkit.surface.DawnMetalView
+import org.graphiks.dawn4k.webgpu.toolkit.surface.withDawnSurface
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIEvent
 import platform.UIKit.UIScreen
