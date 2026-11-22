@@ -52,8 +52,8 @@ kotlin {
         }
         val jvmMain by getting {
             dependencies {
-                // One toolkit module (org.graphiks.webgpu:dawn4k-webgpu-toolkit) replaces the
-                // three legacy dawn4k-toolkit-core/surface/glfw modules, folded into it.
+                // The whole Dawn toolkit in one module: session, window/surface targets,
+                // the glfw host and the dawn-typed handles.
                 implementation(libs.dawn4k.webgpu.toolkit)
             }
         }
@@ -106,8 +106,8 @@ kotlin {
         val jvmTest by getting {
             dependencies {
                 implementation(kotlin("test"))
-                // SessionConfig/Session/openDawnSession resolve transitively: dawn4k-webgpu-toolkit
-                // publishes the toolkit contracts as api since dawn4k #12.
+                // SessionConfig/Session/openDawnSession come through the toolkit module: it
+                // publishes the toolkit contracts as api.
             }
         }
         val iosSimulatorArm64Test by getting {

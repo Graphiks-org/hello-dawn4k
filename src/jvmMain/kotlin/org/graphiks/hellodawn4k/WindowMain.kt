@@ -32,10 +32,9 @@ private const val GLFW_KEY_ESCAPE = 256
  * converges in surface space while M toggles the rasterizer (default) and raytracer
  * views; drag orbits, the wheel zooms, R resets, Escape closes.
  *
- * The top-level glfw.withDawnWindow is the dawn4k-native path (DawnMainThreadLoop):
- * it owns the main-loop pump and already runs the block admitted on the session's
- * execution owner; the block receives the canonical toolkit Session (dawn4k #12) and
- * the extension resolves the dawn-typed handles (the HUD adapter name).
+ * glfw.withDawnWindow owns the main-loop pump and runs the block admitted on the
+ * session's execution owner; the block receives the toolkit Session, and the
+ * extension resolves the dawn-typed handles (the HUD adapter name).
  */
 fun main() = runBlocking {
     val camera = OrbitCamera()

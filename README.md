@@ -91,8 +91,9 @@ golden hash would not be (it varies with the driver).
 
 ## Dependencies
 
-`org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT` (the Dawn toolkit,
-folded from the former `dawn4k-toolkit-*` modules), `org.graphiks.webgpu:api`,
+`org.graphiks.webgpu:dawn4k-webgpu-toolkit:1.0.0-SNAPSHOT` (the Dawn toolkit:
+session, window/surface targets, glfw host, dawn-typed handles),
+`org.graphiks.webgpu:api`,
 `org.graphiks.webgpu:descriptors` and `org.graphiks.webgpu:browser` (web host),
 plus `org.graphiks.kalligraphie:kalligraphie` (+ `api`, `shaping`, `layout`,
 `raster-cpu` — the umbrella POM declares the leaves runtime-only), resolved from

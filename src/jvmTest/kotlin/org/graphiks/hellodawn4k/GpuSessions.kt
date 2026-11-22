@@ -8,9 +8,8 @@ import org.graphiks.webgpu.toolkit.SessionConfig
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Opens a canonical dawn4k session for tests — the interop facade (DawnToolkitInterop,
- * ToolkitSessionView) is gone upstream (dawn4k #12): [openDawnSession] binds the session
- * to the Dawn instance it opened, and dawn-typed handles resolve through the extension.
+ * Opens a dawn4k session for tests: [openDawnSession] binds the session to the Dawn
+ * instance it opened, so the extension's dawn-typed handles resolve against it.
  *
  * The block runs admitted as the session's GPU work and dispatched onto the session's
  * execution owner: the extension creates the Dawn context on a dedicated thread, and
