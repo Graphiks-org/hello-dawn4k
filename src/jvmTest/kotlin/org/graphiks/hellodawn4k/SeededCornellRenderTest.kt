@@ -11,7 +11,6 @@ import kotlin.test.assertTrue
  */
 class SeededCornellRenderTest {
     private val w = HeadlessCornell.WIDTH
-    private val h = HeadlessCornell.HEIGHT
 
     @Test
     fun rasterizerAccumulatesPhotons() {
@@ -28,6 +27,28 @@ class SeededCornellRenderTest {
         val rightRed = HeadlessCornell.channelMean(result.rgba, 3 * w / 4, 100, w, 300, 0)
         assertTrue(leftRed > leftGreen * 1.15, "left wall should be red-dominant: R=$leftRed G=$leftGreen")
         assertTrue(rightGreen > rightRed * 1.15, "right wall should be green-dominant: R=$rightRed G=$rightGreen")
+    }
+
+    @Test
+    fun rasterizerMatchesRaytracerOnTheRedWall() {
+        val rasterized = HeadlessCornell.render(frames = 30, seed = 42, mode = RenderMode.RASTERIZER)
+        val raytraced = HeadlessCornell.render(frames = 30, seed = 42, mode = RenderMode.RAYTRACER)
+        var absoluteError = 0L
+        var pixelCount = 0
+        for (y in 100 until 300) {
+            for (x in 20 until w / 4) {
+                val pixel = (y * w + x) * 4
+                for (channel in 0..2) {
+                    absoluteError += kotlin.math.abs(
+                        (rasterized.rgba[pixel + channel].toInt() and 0xff) -
+                            (raytraced.rgba[pixel + channel].toInt() and 0xff),
+                    )
+                    pixelCount++
+                }
+            }
+        }
+        val meanAbsoluteError = absoluteError.toDouble() / pixelCount
+        assertTrue(meanAbsoluteError < 4.0, "red wall rasterizer/raytracer MAE=$meanAbsoluteError")
     }
 
     @Test

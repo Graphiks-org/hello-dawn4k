@@ -213,7 +213,8 @@ fn radiosity(@builtin(global_invocation_id) gid: vec3u) {
 
         // The sample's bounce kernel: specular reflect blurred by 0.75 of a random unit sphere.
         rayDir = normalize(reflect(rayDir, quad.normalArea.xyz) + randUnitSphere(&rng) * 0.75);
-        rayOrigin = position + quad.normalArea.xyz * 1e-5;
+        let offsetSide = select(-1.0, 1.0, dot(rayDir, quad.normalArea.xyz) >= 0.0);
+        rayOrigin = position + quad.normalArea.xyz * offsetSide * SURFACE_EPSILON;
 
         // Deposit AFTER the albedo multiplication (the sample's order): the
         // lightmap carries exitant light and needs no view-side albedo.
@@ -233,17 +234,18 @@ fn publishLightmap(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup
     let coord = gid.xy;
     if (all(coord < dims)) {
         let base = 3u * (coord.x + dims.x * coord.y + dims.x * dims.y * quadIndex);
-        let color = vec3f(
+        let rawAccumulation = vec3f(
             f32(atomicLoad(&accumulation[base + 0u])),
             f32(atomicLoad(&accumulation[base + 1u])),
             f32(atomicLoad(&accumulation[base + 2u])),
-        ) * photonParams.accumulationToLightmapScale;
+        );
+        let color = rawAccumulation * photonParams.accumulationToLightmapScale;
 
         textureStore(lightmap, coord, quadIndex, vec4f(color, 1.0));
 
         // Near u32 saturation the whole buffer is scaled down (the sample's trick).
         if (photonParams.accumulationBufferScale != 1.0) {
-            let scaled = color * photonParams.accumulationBufferScale + vec3f(0.5);
+            let scaled = rawAccumulation * photonParams.accumulationBufferScale + vec3f(0.5);
             atomicStore(&accumulation[base + 0u], u32(scaled.r));
             atomicStore(&accumulation[base + 1u], u32(scaled.g));
             atomicStore(&accumulation[base + 2u], u32(scaled.b));
@@ -261,7 +263,20 @@ fn publishLightmap(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup
 // Scene helpers live in common.wgsl.
 
 @group(0) @binding(4) var lightmap: texture_2d_array<f32>;
-@group(0) @binding(5) var smpl: sampler;
+
+fn sampleLightmap(uv: vec2f, layer: u32) -> vec4f {
+    let dims = textureDimensions(lightmap);
+    let texel = uv * vec2f(dims) - vec2f(0.5);
+    let lower = vec2i(floor(texel));
+    let upper = lower + vec2i(1, 1);
+    let maxCoord = vec2i(dims) - vec2i(1, 1);
+    let c00 = textureLoad(lightmap, clamp(lower, vec2i(0, 0), maxCoord), i32(layer), 0);
+    let c10 = textureLoad(lightmap, clamp(vec2i(upper.x, lower.y), vec2i(0, 0), maxCoord), i32(layer), 0);
+    let c01 = textureLoad(lightmap, clamp(vec2i(lower.x, upper.y), vec2i(0, 0), maxCoord), i32(layer), 0);
+    let c11 = textureLoad(lightmap, clamp(upper, vec2i(0, 0), maxCoord), i32(layer), 0);
+    let weight = fract(texel);
+    return mix(mix(c00, c10, weight.x), mix(c01, c11, weight.x), weight.y);
+}
 
 const TONEMAP_EXPOSURE: f32 = 0.5;
 
@@ -278,7 +293,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
     let quad = quads[hit.index];
-    let lit = textureSampleLevel(lightmap, smpl, vec2f(hit.u, hit.v), hit.index, 0.0).rgb;
+    let lit = sampleLightmap(vec2f(hit.u, hit.v), hit.index).rgb;
     radiance[index] = vec4f((lit + quad.emissive.xyz) * TONEMAP_EXPOSURE, 1.0);
 }
 """
@@ -299,7 +314,20 @@ struct RasterUniforms {
 
 @group(0) @binding(0) var<uniform> rasterUniforms: RasterUniforms;
 @group(0) @binding(1) var lightmap: texture_2d_array<f32>;
-@group(0) @binding(2) var smpl: sampler;
+
+fn sampleLightmap(uv: vec2f, layer: u32) -> vec4f {
+    let dims = textureDimensions(lightmap);
+    let texel = uv * vec2f(dims) - vec2f(0.5);
+    let lower = vec2i(floor(texel));
+    let upper = lower + vec2i(1, 1);
+    let maxCoord = vec2i(dims) - vec2i(1, 1);
+    let c00 = textureLoad(lightmap, clamp(lower, vec2i(0, 0), maxCoord), i32(layer), 0);
+    let c10 = textureLoad(lightmap, clamp(vec2i(upper.x, lower.y), vec2i(0, 0), maxCoord), i32(layer), 0);
+    let c01 = textureLoad(lightmap, clamp(vec2i(lower.x, upper.y), vec2i(0, 0), maxCoord), i32(layer), 0);
+    let c11 = textureLoad(lightmap, clamp(upper, vec2i(0, 0), maxCoord), i32(layer), 0);
+    let weight = fract(texel);
+    return mix(mix(c00, c10, weight.x), mix(c01, c11, weight.x), weight.y);
+}
 
 struct VertexIn {
     @location(0) position: vec4f,
@@ -324,8 +352,8 @@ fn vs_main(input: VertexIn) -> VertexOut {
 
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4f {
-    let lit = textureSample(lightmap, smpl, input.uv.xy, u32(input.uv.z + 0.5));
-    let color = (lit.rgb + input.emissive) * 0.5; // the sample's tonemap exposure
+    let lit = sampleLightmap(input.uv.xy, u32(input.uv.z + 0.5)).rgb;
+    let color = (lit + input.emissive) * 0.5;
     let tonemapped = color / (vec3f(1.0) + color);
     return vec4f(pow(tonemapped, vec3f(1.0 / 2.2)), 1.0);
 }
