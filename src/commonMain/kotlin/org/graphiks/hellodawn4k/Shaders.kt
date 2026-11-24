@@ -24,6 +24,7 @@ struct Params {
     quadCount: u32,
     width: u32,
     height: u32,
+    seed: u32, // fresh per-frame RNG seed (the raytracer's reflections)
     light: vec4u, // x: index of the single emissive quad
 }
 
@@ -256,10 +257,13 @@ fn publishLightmap(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup
 
     const val RAYTRACER_WGSL: String = """
 // Ray-traced lightmap view aligned with the webgpu-samples Cornell box
-// (sample/cornell/raytracer.wgsl): one primary ray per pixel, the hit samples
-// the photon lightmap directly (it holds exitant light, albedo included) and
-// adds the surface emission. The sample's tonemapper applies a 0.5 exposure,
-// mirrored here since this path skips our present pass's exposure of 1.0.
+// (sample/cornell/raytracer.wgsl): one primary ray per pixel, then the sample's
+// five blurred mirror-reflection rays (rand_unit_sphere*0.1) averaged and mixed
+// at 0.95 under the hit color, linear, pre-exposure (their tonemapper comes
+// after). Reflection seeds are fresh CPU randoms every frame, like their
+// common.ts. Deviations kept on purpose: an explicit black on a missed
+// reflection (they read out of bounds and get zeros), and the repository's
+// single SURFACE_EPSILON where they offset by 1e-5.
 // Scene helpers live in common.wgsl.
 
 @group(0) @binding(4) var lightmap: texture_2d_array<f32>;
@@ -280,6 +284,20 @@ fn sampleLightmap(uv: vec2f, layer: u32) -> vec4f {
 
 const TONEMAP_EXPOSURE: f32 = 0.5;
 
+const REFLECTION_RAYS: u32 = 5u;
+const REFLECTION_BLUR: f32 = 0.1;
+const REFLECTION_MIX: f32 = 0.95;
+
+/** The hit's lightmap color plus emission; a missed ray contributes black
+    (the original samples out of bounds and gets zeros). */
+fn sampleHit(hit: Hit) -> vec3f {
+    if (hit.index == MISSED) {
+        return vec3f(0.0);
+    }
+    let quad = quads[hit.index];
+    return sampleLightmap(vec2f(hit.u, hit.v), hit.index).rgb + quad.emissive.xyz;
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (gid.x >= params.width || gid.y >= params.height) {
@@ -287,14 +305,27 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
     let index = gid.y * params.width + gid.x;
 
-    let hit = closestHit(camera.position.xyz, cameraRay(gid.xy));
+    var rng = Rng(params.seed ^ (gid.x * 747796405u) ^ (gid.y * 2891336453u));
+    _ = rngNext(&rng);
+
+    let direction = cameraRay(gid.xy);
+    let hit = closestHit(camera.position.xyz, direction);
     if (hit.index == MISSED) {
         radiance[index] = vec4f(0.0, 0.0, 0.0, 1.0);
         return;
     }
     let quad = quads[hit.index];
-    let lit = sampleLightmap(vec2f(hit.u, hit.v), hit.index).rgb;
-    radiance[index] = vec4f((lit + quad.emissive.xyz) * TONEMAP_EXPOSURE, 1.0);
+    let position = camera.position.xyz + direction * hit.t;
+
+    let bounce = reflect(direction, quad.normalArea.xyz);
+    var reflection = vec3f(0.0);
+    for (var i = 0u; i < REFLECTION_RAYS; i++) {
+        let reflectionDir = normalize(bounce + randUnitSphere(&rng) * REFLECTION_BLUR);
+        let reflectionHit = closestHit(position + bounce * SURFACE_EPSILON, reflectionDir);
+        reflection += sampleHit(reflectionHit);
+    }
+    let color = mix(reflection / f32(REFLECTION_RAYS), sampleHit(hit), REFLECTION_MIX);
+    radiance[index] = vec4f(color * TONEMAP_EXPOSURE, 1.0);
 }
 """
 

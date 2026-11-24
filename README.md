@@ -44,7 +44,8 @@ rescaling, fresh CPU seeds every frame).
 
 - **rasterizer** (default) — indexed quad mesh, classic MVP, a fragment
   sampling the lightmap; depth buffer, ~900 fps;
-- **raytracer** — one primary ray per pixel over the same lightmap, at the
+- **raytracer** — one primary ray per pixel plus the sample's five blurred
+  mirror-reflection rays mixed at 5 %, over the same lightmap, at the
   window's physical resolution.
 
 The **status** (mode, framerate, accumulated photons, camera, GPU adapter) is
@@ -67,6 +68,7 @@ session, RGBA8Unorm offscreen target) over seeded photons:
   drops between 1 and 30 frames — the historical frozen-accumulation
   regression;
 - the raytracer is not black (the never-written camera uniform regression);
+- the raytracer catches the red wall in its mirror (the reflection-ray port);
 - the whole glyph chain (font → shaping → rasterization → atlas → alpha GPU
   pass) leaves lit pixels on an offscreen target.
 
