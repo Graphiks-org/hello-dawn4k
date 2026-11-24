@@ -33,13 +33,13 @@ class SeededCornellRenderTest {
     fun raytracerReflectsTheRedWallOnTheTallBox() {
         val rasterized = HeadlessCornell.render(frames = 30, seed = 42, mode = RenderMode.RASTERIZER)
         val raytraced = HeadlessCornell.render(frames = 30, seed = 42, mode = RenderMode.RAYTRACER)
-        // La face gauche de la grande boîte miroite le mur rouge : 5 % de lumière
-        // réfléchie ajoute du rouge, absent du rasterizer.
+        // The tall box's left face mirrors the red wall: 5% reflected light
+        // adds red, which the rasterizer does not have.
         val rasterRed = HeadlessCornell.channelMean(rasterized.rgba, 320, 280, 375, 420, 0)
         val tracedRed = HeadlessCornell.channelMean(raytraced.rgba, 320, 280, 375, 420, 0)
         assertTrue(tracedRed > rasterRed + 4.0, "the tall box face should catch the red wall: raster=$rasterRed traced=$tracedRed")
 
-        // Première frame, lightmap encore vide : la valeur doit rester valide (pas de NaN).
+        // First frame, lightmap still empty: the value must stay valid (no NaN).
         val firstFrame = HeadlessCornell.render(frames = 1, seed = 42, mode = RenderMode.RAYTRACER)
         val firstRed = HeadlessCornell.channelMean(firstFrame.rgba, 320, 280, 375, 420, 0)
         assertTrue(firstRed >= 0.0 && firstRed < 255.0, "first traced frame must stay valid: $firstRed")
