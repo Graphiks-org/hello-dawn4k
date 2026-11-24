@@ -8,7 +8,6 @@ import org.graphiks.webgpu.GPUCommandEncoder
 import org.graphiks.webgpu.GPUCompareFunction
 import org.graphiks.webgpu.GPUComputePassEncoder
 import org.graphiks.webgpu.GPUDevice
-import org.graphiks.webgpu.GPUFilterMode
 import org.graphiks.webgpu.GPUIndexFormat
 import org.graphiks.webgpu.GPULoadOp
 import org.graphiks.webgpu.GPUQueue
@@ -40,8 +39,6 @@ import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
 import org.graphiks.webgpu.descriptors.RenderPassDepthStencilAttachment
 import org.graphiks.webgpu.descriptors.RenderPassDescriptor
 import org.graphiks.webgpu.descriptors.RenderPipelineDescriptor
-import org.graphiks.webgpu.descriptors.SamplerBindingLayout
-import org.graphiks.webgpu.descriptors.SamplerDescriptor
 import org.graphiks.webgpu.descriptors.ShaderModuleDescriptor
 import org.graphiks.webgpu.descriptors.StorageTextureBindingLayout
 import org.graphiks.webgpu.descriptors.TextureBindingLayout
@@ -126,10 +123,6 @@ class CornellRenderer(
         ),
     )
     private val lightmapView = lightmapTexture.createView()
-    private val lightmapSampler = device.createSampler(SamplerDescriptor(
-        magFilter = GPUFilterMode.Linear,
-        minFilter = GPUFilterMode.Linear,
-    ))
     private val photonParams = device.createBuffer(
         BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
@@ -251,10 +244,6 @@ class CornellRenderer(
                     viewDimension = GPUTextureViewDimension.TwoDArray,
                 ),
             ),
-            BindGroupLayoutEntry(
-                5u, GPUShaderStage.Compute,
-                sampler = SamplerBindingLayout(),
-            ),
         )),
     )
     private val raytracerPipelineLayout = device.createPipelineLayout(
@@ -275,7 +264,6 @@ class CornellRenderer(
                 BindGroupEntry(2u, params),
                 BindGroupEntry(3u, cameraBuffer),
                 BindGroupEntry(4u, lightmapView),
-                BindGroupEntry(5u, lightmapSampler),
             ),
         ),
     )
@@ -329,7 +317,7 @@ class CornellRenderer(
     private val rasterBinding = device.createBindGroup(
         BindGroupDescriptor(
             rasterLayout,
-            listOf(BindGroupEntry(0u, rasterUniforms), BindGroupEntry(1u, lightmapView), BindGroupEntry(2u, lightmapSampler)),
+            listOf(BindGroupEntry(0u, rasterUniforms), BindGroupEntry(1u, lightmapView)),
         ),
     )
     private var depthTexture: GPUTexture? = null
@@ -415,7 +403,6 @@ class CornellRenderer(
                     BindGroupEntry(2u, params),
                     BindGroupEntry(3u, cameraBuffer),
                     BindGroupEntry(4u, lightmapView),
-                    BindGroupEntry(5u, lightmapSampler),
                 ),
             ),
         )
@@ -650,7 +637,6 @@ class CornellRenderer(
         vertexBuffer.close()
         rasterUniforms.close()
         photonParams.close()
-        lightmapSampler.close()
         depthView?.close()
         depthTexture?.close()
         lightmapView.close()

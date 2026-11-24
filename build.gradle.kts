@@ -150,9 +150,19 @@ val extractKffiHarfbuzzGlue by tasks.registering(Copy::class) {
     include("*.mjs")
     into(layout.buildDirectory.dir("wasm/packages/${project.name}/kotlin"))
 }
-// The Kotlin compile regenerates the package directory the glue is copied into — run the
-// copy after it, or a recompile wipes the .mjs files out from under webpack (flake seen).
-extractKffiHarfbuzzGlue.configure { dependsOn(tasks.named("compileKotlinWasmJs")) }
-listOf("wasmJsBrowserDevelopmentWebpack", "wasmJsBrowserProductionWebpack").forEach { name ->
+// Executable compilation regenerates the package directory; run the copy after its sync,
+// or the .mjs files can be wiped before webpack or the development server starts.
+extractKffiHarfbuzzGlue.configure {
+    dependsOn(tasks.named("compileKotlinWasmJs"))
+    mustRunAfter(
+        tasks.named("wasmJsDevelopmentExecutableCompileSync"),
+        tasks.named("wasmJsProductionExecutableCompileSync"),
+    )
+}
+listOf(
+    "wasmJsBrowserDevelopmentWebpack",
+    "wasmJsBrowserProductionWebpack",
+    "wasmJsBrowserDevelopmentRun",
+).forEach { name ->
     tasks.matching { it.name == name }.configureEach { dependsOn(extractKffiHarfbuzzGlue) }
 }
