@@ -430,7 +430,7 @@ class CornellRenderer(
             scene.quadCount.toUInt(),
             renderWidth.toUInt(),
             renderHeight.toUInt(),
-            0u, // alignment padding: light lands at byte offset 16
+            photonRandom.nextInt().toUInt(), // fresh per-frame reflection seed
             scene.lightIndex.toUInt(), 0u, 0u, 0u,
         )))
         val workgroupsX = ((renderWidth + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE).toUInt()
