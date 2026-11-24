@@ -1,15 +1,10 @@
 package org.graphiks.hellodawn4k
 
 import kotlinx.coroutines.runBlocking
-import org.graphiks.webgpu.GPULoadOp
-import org.graphiks.webgpu.GPUStoreOp
 import org.graphiks.webgpu.GPUTextureFormat
 import org.graphiks.webgpu.GPUTextureUsage
 import org.graphiks.webgpu.descriptors.BufferDescriptor
-import org.graphiks.webgpu.descriptors.Color
 import org.graphiks.webgpu.descriptors.Extent3D
-import org.graphiks.webgpu.descriptors.RenderPassColorAttachment
-import org.graphiks.webgpu.descriptors.RenderPassDescriptor
 import org.graphiks.webgpu.descriptors.TextureDescriptor
 import org.graphiks.webgpu.GPUBufferUsage
 import org.graphiks.webgpu.GPUMapMode

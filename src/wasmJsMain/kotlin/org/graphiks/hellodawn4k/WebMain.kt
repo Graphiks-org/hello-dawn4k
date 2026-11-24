@@ -47,7 +47,7 @@ fun main() {
 
         // DOM controls stay outside the toolkit: mode button, keyboard, pointer orbit.
         fun toggleMode() {
-            mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+            mode = mode.toggled
             modeButton.textContent = "Mode: ${if (mode == RenderMode.RASTERIZER) "rasterizer" else "raytracer"} (M)"
         }
         modeButton.onclick = { toggleMode() }
@@ -158,8 +158,6 @@ private suspend fun runSurfacePass(target: CanvasSurfaceTarget, domCanvas: HTMLC
                     ) { encoder, rendered -> overlay.draw(encoder, rendered) }
                     frame.present()
                 }
-                renderer.consumeResize()
-
                 val now = window.performance.now()
                 if (lastFrameAt >= 0.0) {
                     emaFrameMs = emaFrameMs * 0.9 + (now - lastFrameAt) * 0.1

@@ -1,7 +1,5 @@
 package org.graphiks.hellodawn4k
 
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlin.math.tan
 
 /** Column-major 4x4 matrices (WGSL mat4x4f layout), just what the rasterizer MVP needs. */

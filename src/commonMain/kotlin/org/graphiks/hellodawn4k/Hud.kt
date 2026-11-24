@@ -236,9 +236,9 @@ private class HudPass(
 )
 
 /**
- * GPU side of the glyph chain: a lazily filled R8 coverage atlas (rewritten whole on growth;
- * 512-wide rows keep bytesPerRow a multiple of 256) and one alpha-blended quad draw
- * per glyph through a storage-buffer vertex stream.
+ * GPU side of the glyph chain: a lazily filled, fixed-size R8 coverage atlas (512-wide
+ * rows keep bytesPerRow a multiple of 256; glyphs that no longer fit are skipped) and
+ * one alpha-blended quad draw per glyph through a storage-buffer vertex stream.
  */
 class HudRenderer(
     private val device: GPUDevice,

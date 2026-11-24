@@ -2,6 +2,7 @@ package org.graphiks.hellodawn4k
 
 import kotlin.random.Random
 import org.graphiks.webgpu.ArrayBuffer
+import org.graphiks.webgpu.GPUBuffer
 import org.graphiks.webgpu.GPUBufferBindingType
 import org.graphiks.webgpu.GPUBufferUsage
 import org.graphiks.webgpu.GPUCommandEncoder
@@ -50,7 +51,13 @@ import org.graphiks.webgpu.descriptors.VertexState
 private const val WORKGROUP_SIZE = 8
 
 /** Rendering modes over the shared photon lightmap, mirroring the webgpu-samples renderers. */
-enum class RenderMode { RASTERIZER, RAYTRACER }
+enum class RenderMode {
+    RASTERIZER, RAYTRACER;
+
+    /** The other view pass — the hosts' M key / double-tap toggle. */
+    val toggled: RenderMode
+        get() = if (this == RASTERIZER) RAYTRACER else RASTERIZER
+}
 
 /**
  * One acquired presentation target: a borrowed texture view and its pixel extent.
@@ -107,7 +114,6 @@ class CornellRenderer(
     // --- Radiosity (the sample's Radiosity): photons -> atomic u32 -> 256x256 lightmap ---
     private val lightmapSize = 256u
     private val photonTexels = (lightmapSize * lightmapSize * scene.quadCount.toUInt()).toDouble()
-    private val radiosityCode: String = Shaders.COMMON_WGSL + "\n" + Shaders.RADIOSITY_WGSL
 
     private val photonAccumulation = device.createBuffer(
         BufferDescriptor(
@@ -126,7 +132,7 @@ class CornellRenderer(
     private val photonParams = device.createBuffer(
         BufferDescriptor(32uL, GPUBufferUsage.Uniform or GPUBufferUsage.CopyDst),
     )
-    private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(radiosityCode))
+    private val radiosityShader = device.createShaderModule(ShaderModuleDescriptor(shader(Shaders.RADIOSITY_WGSL)))
 
     // Explicit bind group layouts (the sample's pattern): Firefox's auto layout may
     // include unused bindings declared in the common module, causing a mismatch with
@@ -194,18 +200,6 @@ class CornellRenderer(
             ),
         ),
     )
-    private val publishBinding = device.createBindGroup(
-        BindGroupDescriptor(
-            radiosityBindGroupLayout,
-            listOf(
-                BindGroupEntry(0u, quads),
-                BindGroupEntry(2u, params),
-                BindGroupEntry(4u, photonAccumulation),
-                BindGroupEntry(5u, lightmapView),
-                BindGroupEntry(6u, photonParams),
-            ),
-        ),
-    )
     private var accumulationMean = 0.0
     var photonsEmitted = 0.0
         private set
@@ -255,18 +249,20 @@ class CornellRenderer(
             compute = ProgrammableStage(raytracerShader, "main"),
         ),
     )
-    private var raytracerBinding = device.createBindGroup(
+    /** The raytracer's interface over one radiance buffer; rebuilt when the buffer swaps. */
+    private fun createRaytracerBinding(radianceBuffer: GPUBuffer) = device.createBindGroup(
         BindGroupDescriptor(
             raytracerBindGroupLayout,
             listOf(
                 BindGroupEntry(0u, quads),
-                BindGroupEntry(1u, radiance),
+                BindGroupEntry(1u, radianceBuffer),
                 BindGroupEntry(2u, params),
                 BindGroupEntry(3u, cameraBuffer),
                 BindGroupEntry(4u, lightmapView),
             ),
         ),
     )
+    private var raytracerBinding = createRaytracerBinding(radiance)
 
     // --- Rasterized lightmap view (the sample's Rasterizer, their default renderer) ---
     private val rasterUniforms = device.createBuffer(
@@ -373,13 +369,6 @@ class CornellRenderer(
         queue.writeBuffer(cameraBuffer, 0uL, ArrayBuffer.of(basis.toUniform()))
     }
 
-    private var resizePending = false
-
-    /** Clears the flag set when the render target switched size (radiance buffer reallocated). */
-    fun consumeResize() {
-        resizePending = false
-    }
-
     /**
      * The ray-traced view renders at the target's physical extent, like the rasterizer:
      * primary-visibility edges get native pixel density. Swaps the radiance buffer and
@@ -394,25 +383,13 @@ class CornellRenderer(
         )
         queue.writeBuffer(dims, 0uL, ArrayBuffer.of(uintArrayOf(width.toUInt(), height.toUInt(), 0u, 0u)))
         raytracerBinding.close()
-        raytracerBinding = device.createBindGroup(
-            BindGroupDescriptor(
-                raytracerBindGroupLayout,
-                listOf(
-                    BindGroupEntry(0u, quads),
-                    BindGroupEntry(1u, replacement),
-                    BindGroupEntry(2u, params),
-                    BindGroupEntry(3u, cameraBuffer),
-                    BindGroupEntry(4u, lightmapView),
-                ),
-            ),
-        )
+        raytracerBinding = createRaytracerBinding(replacement)
         presentBinding.close()
         presentBinding = device.createBindGroup(
             BindGroupDescriptor(presentBindGroupLayout, listOf(BindGroupEntry(0u, replacement), BindGroupEntry(1u, dims))),
         )
         radiance.close()
         radiance = replacement
-        resizePending = true
     }
 
     /**
@@ -474,22 +451,21 @@ class CornellRenderer(
         val bufferScale = if (accumulationMean > 2 * 0x10000000) 0.5 else 1.0
         accumulationMean *= bufferScale
         photonsEmitted += photonsPerFrame.toDouble()
-        val seeds = photonRandom
         queue.writeBuffer(photonParams, 0uL, ArrayBuffer.of(floatArrayOf(
             toLightmapScale.toFloat(),
             bufferScale.toFloat(),
             Float.fromBits(scene.quadCount),
             Float.fromBits(scene.lightIndex),
-            Float.fromBits(seeds.nextInt()),
-            Float.fromBits(seeds.nextInt()),
-            Float.fromBits(seeds.nextInt()),
+            Float.fromBits(photonRandom.nextInt()),
+            Float.fromBits(photonRandom.nextInt()),
+            Float.fromBits(photonRandom.nextInt()),
             0f,
         )))
         pass.setPipeline(radiosityPipeline)
         pass.setBindGroup(0u, radiosityBinding)
         pass.dispatchWorkgroups(1024u)
         pass.setPipeline(publishPipeline)
-        pass.setBindGroup(0u, publishBinding)
+        pass.setBindGroup(0u, radiosityBinding)
         pass.dispatchWorkgroups(lightmapSize / 8u, lightmapSize / 8u, scene.quadCount.toUInt())
     }
 
@@ -575,29 +551,24 @@ class CornellRenderer(
         val data = scene.quadData
         for (quad in 0 until scene.quadCount) {
             val o = quad * Scene.FLOATS_PER_QUAD
-            val origin = floatArrayOf(data[o], data[o + 1], data[o + 2])
-            val edge1 = floatArrayOf(data[o + 4], data[o + 5], data[o + 6])
-            val edge2 = floatArrayOf(data[o + 8], data[o + 9], data[o + 10])
-            val emissive = floatArrayOf(data[o + 16], data[o + 17], data[o + 18])
-            val corners = arrayOf(
-                origin,
-                floatArrayOf(origin[0] + edge1[0], origin[1] + edge1[1], origin[2] + edge1[2]),
-                floatArrayOf(origin[0] + edge1[0] + edge2[0], origin[1] + edge1[1] + edge2[1], origin[2] + edge1[2] + edge2[2]),
-                floatArrayOf(origin[0] + edge2[0], origin[1] + edge2[1], origin[2] + edge2[2]),
-            )
-            val uvs = arrayOf(floatArrayOf(0f, 0f), floatArrayOf(1f, 0f), floatArrayOf(1f, 1f), floatArrayOf(0f, 1f))
+            val origin = V3(data[o], data[o + 1], data[o + 2])
+            val edge1 = V3(data[o + 4], data[o + 5], data[o + 6])
+            val edge2 = V3(data[o + 8], data[o + 9], data[o + 10])
+            val emissive = V3(data[o + 16], data[o + 17], data[o + 18])
+            val corners = listOf(origin, origin + edge1, origin + edge1 + edge2, origin + edge2)
+            val uvs = listOf(0f to 0f, 1f to 0f, 1f to 1f, 0f to 1f)
             for (corner in 0 until 4) {
                 val v = (quad * 4 + corner) * 10
-                vertices[v] = corners[corner][0]
-                vertices[v + 1] = corners[corner][1]
-                vertices[v + 2] = corners[corner][2]
+                vertices[v] = corners[corner].x
+                vertices[v + 1] = corners[corner].y
+                vertices[v + 2] = corners[corner].z
                 vertices[v + 3] = 1f
-                vertices[v + 4] = uvs[corner][0]
-                vertices[v + 5] = uvs[corner][1]
+                vertices[v + 4] = uvs[corner].first
+                vertices[v + 5] = uvs[corner].second
                 vertices[v + 6] = quad.toFloat()
-                vertices[v + 7] = emissive[0]
-                vertices[v + 8] = emissive[1]
-                vertices[v + 9] = emissive[2]
+                vertices[v + 7] = emissive.x
+                vertices[v + 8] = emissive.y
+                vertices[v + 9] = emissive.z
             }
             val base = quad * 6
             val first = (quad * 4).toUShort()
@@ -615,13 +586,12 @@ class CornellRenderer(
         if (closed) return
         closed = true
         radiosityBinding.close()
-        publishBinding.close()
         raytracerBinding.close()
         rasterBinding.close()
         presentBinding.close()
         radiosityBindGroupLayout.close()
         radiosityPipelineLayout.close()
-                raytracerBindGroupLayout.close()
+        raytracerBindGroupLayout.close()
         rasterLayout.close()
         presentBindGroupLayout.close()
         rasterPipeline.close()

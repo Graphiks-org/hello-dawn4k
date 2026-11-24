@@ -1,7 +1,6 @@
 package org.graphiks.hellodawn4k
 
 import kotlinx.coroutines.runBlocking
-import org.graphiks.webgpu.ArrayBuffer
 import org.graphiks.webgpu.GPUBufferUsage
 import org.graphiks.webgpu.GPUMapMode
 import org.graphiks.webgpu.GPUTextureFormat
@@ -49,7 +48,6 @@ object HeadlessCornell {
                     repeat(frames) {
                         renderer.updateCamera(camera.basis())
                         renderer.renderFrame(Frame(view, WIDTH, HEIGHT), mode, camera)
-                        renderer.consumeResize()
                     }
                     val encoder = session.device.createCommandEncoder()
                     try {

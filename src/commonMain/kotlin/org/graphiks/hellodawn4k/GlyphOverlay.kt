@@ -30,9 +30,8 @@ class GlyphOverlay(
 
     fun update(status: String) {
         val hud = renderer ?: return
-        val shaped = text ?: return
         vertices = hud.buildVertices(
-            status.lines().map { line -> shaped.layoutLine(line) },
+            status.lines().map { line -> checkNotNull(text).layoutLine(line) },
             baseX = 24f * scale,
             baseY = 60f * scale,
             lineHeight = 30f * scale,

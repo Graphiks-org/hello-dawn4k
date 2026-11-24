@@ -55,7 +55,6 @@ suspend fun Session.runCornellLoop(
                 ) { encoder, rendered -> overlay?.draw(encoder, rendered) }
                 frame.present()
             }
-            renderer.consumeResize()
             if (timeSource.markNow() - lastStatusAt > 500.milliseconds) {
                 lastStatusAt = timeSource.markNow()
                 val text = statusLines((1000.0 / emaFrameMs).roundToInt(), renderer, state.mode, state.camera)
