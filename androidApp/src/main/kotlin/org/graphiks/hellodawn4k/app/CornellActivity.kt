@@ -70,7 +70,7 @@ class CornellActivity : Activity(), CornellHostState {
             MotionEvent.ACTION_DOWN -> {
                 val now = event.downTime
                 if (now - lastDownAt < 300) {
-                    _mode = if (_mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+                    _mode = _mode.toggled
                 }
                 lastDownAt = now
                 lastPointer = event.x to event.y

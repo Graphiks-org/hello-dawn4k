@@ -5,7 +5,6 @@ import kotlinx.cinterop.useContents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -35,7 +34,7 @@ private class CornellHostStateImpl : CornellHostState {
     override fun consumeCameraDirty() { _cameraDirty = false }
     fun dirtyCamera() { _cameraDirty = true }
     fun toggleMode() {
-        _mode = if (_mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+        _mode = _mode.toggled
     }
 
     // The status overlay is the shared glyph chain; showStatus is reserved for hosts

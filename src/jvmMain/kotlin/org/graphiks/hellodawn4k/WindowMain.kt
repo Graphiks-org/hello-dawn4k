@@ -119,7 +119,7 @@ private suspend fun renderCornellFrames(
         while (currentCoroutineContext().isActive && !controls.closeRequested) {
             if (controls.toggleMode) {
                 controls.toggleMode = false
-                mode = if (mode == RenderMode.RASTERIZER) RenderMode.RAYTRACER else RenderMode.RASTERIZER
+                mode = mode.toggled
                 lastHudAt = 0L // force a HUD refresh with the new mode
             }
             if (controls.cameraDirty) {
@@ -127,15 +127,12 @@ private suspend fun renderCornellFrames(
                 renderer.updateCamera(controls.camera.basis())
             }
             val frameStartedAt = System.nanoTime()
-            if (presentation.withFrame { frame ->
-                    renderer.renderFrame(frame.toFrame(), mode, controls.camera) { encoder, rendered ->
-                        overlay.draw(encoder, rendered)
-                    }
-                    frame.present()
-                }) {
-                // Frame presented; nothing to count.
+            presentation.withFrame { frame ->
+                renderer.renderFrame(frame.toFrame(), mode, controls.camera) { encoder, rendered ->
+                    overlay.draw(encoder, rendered)
+                }
+                frame.present()
             }
-            renderer.consumeResize()
             val frameMs = (System.nanoTime() - frameStartedAt) / 1_000_000.0
             emaFrameMs = emaFrameMs * 0.9 + frameMs * 0.1
             if (System.nanoTime() - lastHudAt > 500_000_000L) {
